@@ -417,22 +417,22 @@ uint16_t USBD_Get_Configuration_Number(uint8_t class_type, uint8_t interface_typ
 #define USBD_CDCACM_EPINCMD_FS_BINTERVAL              5U
 #define USBD_CDCACM_EPINCMD_HS_BINTERVAL              5U
 
-/* Device VIDEO Class (IF2-3). M2는 예제 값(320x236 MJPEG, HS 512 B) 그대로, M3에서 720p30으로 바꾼다. */
+/* Device VIDEO Class (IF2-3). M3: 1280x720 30fps MJPEG, HS isochronous 1024 B x 1/마이크로프레임(약 8 MB/s). */
 #define USBD_VIDEO_EPIN_ADDR                          0x83U
 #define USBD_VIDEO_EPIN_FS_MPS                        300U
-#define USBD_VIDEO_EPIN_HS_MPS                        512U
+#define USBD_VIDEO_EPIN_HS_MPS                        1024U
 #define USBD_VIDEO_EPIN_FS_BINTERVAL                  1U
 #define USBD_VIDEO_EPIN_HS_BINTERVAL                  1U
 
-#define UVC_FRAME_WIDTH                               320U
-#define UVC_FRAME_HEIGHT                              236U
+#define UVC_FRAME_WIDTH                               1280U
+#define UVC_FRAME_HEIGHT                              720U
 #define UVC_CAM_FPS_FS                                10U
-#define UVC_CAM_FPS_HS                                5U
+#define UVC_CAM_FPS_HS                                30U
 
 #define UVC_MIN_BIT_RATE(n)                           (UVC_FRAME_WIDTH * UVC_FRAME_HEIGHT * 16U * (n))
 #define UVC_MAX_BIT_RATE(n)                           (UVC_FRAME_WIDTH * UVC_FRAME_HEIGHT * 16U * (n))
 #define UVC_INTERVAL(n)                               (10000000U/(n))
-#define UVC_MAX_FRAME_SIZE                            (UVC_FRAME_WIDTH * UVC_FRAME_HEIGHT * 16U / 2U)
+#define UVC_MAX_FRAME_SIZE                            (512U * 1024U)  /* JPEG 한 장 최대 = VFQ_SLOT_SIZE */
 
 #define VC_HEADER_SIZE                                0x37U
 

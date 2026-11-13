@@ -45,9 +45,9 @@ extern "C" {
 
 #define TX_APP_MEM_POOL_SIZE                     1024
 
-#define UX_APP_MEM_POOL_SIZE                     (28U * 1024U)
+#define UX_APP_MEM_POOL_SIZE                     (36U * 1024U)
 
-#define USBPD_DEVICE_APP_MEM_POOL_SIZE           5000
+#define USBPD_DEVICE_APP_MEM_POOL_SIZE           (8U * 1024U)  /* CAD·PE 스택 2048씩 */
 
 /* USER CODE BEGIN EC */
 

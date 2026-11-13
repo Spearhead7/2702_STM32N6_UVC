@@ -46,10 +46,14 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 ## 현재 상태
 - 보드 MB1939-N6570-C02, 카메라 MB1854B, USB1 = CN18.
 - M1: 예제 3개 모두 Windows PC에서 동작 확인. 태블릿 UVC 뷰어 확인과 기종·앱 이름 기록(PRD 10장)은 사용자가 나중에 한다.
-- **M2 보드 확인 대기**: `fw/`(CubeIDE 프로젝트 `STM32N6_UVC`)에 CDC 에코 + UVC 고정 MJPEG composite 작성, 빌드 0 errors. 확인 절차는 `docs/m2-guide.md`, 변경 내역은 `docs/progress.md`.
+- **M2 완료**(2026-11-13): `fw/`(CubeIDE 프로젝트 `STM32N6_UVC`)의 CDC 에코 + UVC 고정 MJPEG composite가 Windows에서 동시 동작 확인.
+- **M3 코드 완료, 보드 확인 대기**(2026-11-13): IMX335 → DCMIPP/ISP → VENC JPEG → 프레임 큐 → UVC 1280×720 30fps. 확인 절차 `docs/m3-guide.md`, 변경 내역 `docs/progress.md`.
+- HardFault 시 원인 레지스터·PC·스레드 이름이 USART1로 출력된다. PC는 `arm-none-eabi-addr2line -f -e fw/Debug/STM32N6_UVC.elf <PC>`로 찾는다. Debug(-O0)는 스택을 많이 쓰니 스레드 스택은 넉넉히 잡는다.
 
 ## 펌웨어 구조 (fw/)
 - CubeN6 V1.4.1 `USBPD_SNK_Ux_Device_HID_CDC_ACM`에서 출발(ThreadX + USBX + USBPD). UVC는 `Ux_Device_Video`에서 가져옴.
 - `.ioc` 없음. CubeMX로 다시 생성하지 말고 코드를 직접 고친다.
 - 개발 모드 전용 링커 배치(AXISRAM2, ROM 383K / RAM 128K, 끝 32K는 MPU 비캐시). 플래시 부팅 구조는 M6에서.
 - 디버그 로그: printf → USART1(ST-LINK 가상 COM, 115200).
+- 영상: `fw/Video/`(video_app: 카메라·인코딩 스레드와 `MX_DCMIPP_Init` 재정의, jpeg_enc, vframe_queue, video_cfg). 큰 버퍼는 `IN_PSRAM`(링커 `.psram_bss`, 0x90000000, MPU 비캐시). PSRAM은 `main.c`의 `PSRAM_Init()`이 ThreadX 시작 전에 켠다.
+- HSLV OTP 퓨즈는 읽기만 한다(ST 예제 FSBL은 굽지만 되돌릴 수 없으므로 굽지 않는다).

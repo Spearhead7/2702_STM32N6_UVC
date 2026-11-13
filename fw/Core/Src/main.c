@@ -29,6 +29,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "stm32n6570_discovery_xspi.h"
 
 /* USER CODE END Includes */
 
@@ -60,6 +61,7 @@ void SystemClock_Config(void);
 static void MPU_Config(void);
 static void SystemIsolation_Config(void);
 /* USER CODE BEGIN PFP */
+static void PSRAM_Init(void);
 
 /* USER CODE END PFP */
 
@@ -118,7 +120,9 @@ int main(void)
   /* Call PreOsInit function */
   USBPD_PreInitOs();
   /* USER CODE BEGIN 2 */
-  printf("\r\n=== STM32N6 UVC (M2: CDC echo + UVC fixed MJPEG) ===\r\n");
+  printf("\r\n=== STM32N6 UVC (M3: camera MJPEG 720p30 + CDC echo) ===\r\n");
+  /* 외부 PSRAM: 영상 버퍼가 있으므로 ThreadX(영상 스레드) 시작 전에 켠다 */
+  PSRAM_Init();
   /* USER CODE END 2 */
 
   MX_ThreadX_Init();
@@ -306,6 +310,13 @@ void SystemClock_Config(void)
   HAL_GPIO_ConfigPinAttributes(GPIOO,GPIO_PIN_1,GPIO_PIN_SEC|GPIO_PIN_NPRIV);
 
 /* USER CODE BEGIN RIF_Init 1 */
+  /* M3: 카메라(DCMIPP, CSI)와 하드웨어 인코더(VENC). 값은 CubeN6 VENC_USB RISAF_Config()와 같다.
+     DCMIPP·VENC는 버스 마스터로 PSRAM을 직접 읽고 쓴다. */
+  HAL_RIF_RIMC_ConfigMasterAttributes(RIF_MASTER_INDEX_DCMIPP, &RIMC_master);
+  HAL_RIF_RIMC_ConfigMasterAttributes(RIF_MASTER_INDEX_VENC, &RIMC_master);
+  HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_DCMIPP, RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
+  HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_CSI, RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
+  HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_VENC, RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
 
 /* USER CODE END RIF_Init 1 */
 /* USER CODE BEGIN RIF_Init 2 */
@@ -323,6 +334,84 @@ int __io_putchar(int ch)
   uint8_t c = (uint8_t)ch;
   (void)HAL_UART_Transmit(&huart1, &c, 1U, 10U);
   return ch;
+}
+
+/**
+  * @brief  VDDIO3(XSPI1 포트, PSRAM) 1.8V 고속 패드(HSLV) OTP 퓨즈가 켜져 있는지 읽는다.
+  *         읽기만 한다. ST 예제의 FSBL(OTP_Config)은 이 퓨즈를 직접 굽지만(되돌릴 수 없음)
+  *         이 펌웨어는 굽지 않는다.
+  * @retval 1: 켜짐, 0: 꺼짐 또는 읽기 실패
+  */
+static uint32_t PSRAM_HslvFused(void)
+{
+  BSEC_HandleTypeDef hbsec = {0};
+  uint32_t data = 0U;
+
+  __HAL_RCC_BSEC_CLK_ENABLE();
+  hbsec.Instance = BSEC;
+  if (HAL_BSEC_OTP_Read(&hbsec, 124U /* HW config */, &data) != HAL_OK)
+  {
+    return 0U;
+  }
+  return ((data & (1UL << 15) /* HSLV_VDDIO3 */) != 0U) ? 1U : 0U;
+}
+
+/**
+  * @brief  외부 PSRAM(APS256XX 32MB, XSPI1)을 memory-mapped(0x90000000)로 켠다.
+  *         XSPI1 클럭은 IC3 = PLL1(1200 MHz)/6 = 200 MHz. CubeN6 VENC_USB는 HCLK(200 MHz)를
+  *         썼지만 이 프로젝트는 HCLK가 100 MHz라서 IC3를 쓴다.
+  *         HSLV 퓨즈가 꺼져 있으면 패드가 200 MHz를 못 낼 수 있어 100 MHz(/12)로 낮춘다
+  *         (영상에 필요한 대역폭 약 120 MB/s는 100 MHz에서도 충분하다).
+  *         BSP가 처음엔 1/4 속도로 설정을 쓴 뒤 최종 속도로 올린다.
+  */
+static void PSRAM_Init(void)
+{
+  RCC_PeriphCLKInitTypeDef clk = {0};
+  volatile uint32_t *p = (volatile uint32_t *)0x90000000U;
+  uint32_t errors = 0U;
+  uint32_t hslv = PSRAM_HslvFused();
+
+  printf("PSRAM: VDDIO3 HSLV fuse %s\r\n", (hslv != 0U) ? "set" : "NOT set (using 100 MHz)");
+
+  clk.PeriphClockSelection = RCC_PERIPHCLK_XSPI1;
+  clk.Xspi1ClockSelection = RCC_XSPI1CLKSOURCE_IC3;
+  clk.ICSelection[RCC_IC3].ClockSelection = RCC_ICCLKSOURCE_PLL1;
+  clk.ICSelection[RCC_IC3].ClockDivider = (hslv != 0U) ? 6U : 12U;
+  if (HAL_RCCEx_PeriphCLKConfig(&clk) != HAL_OK)
+  {
+    printf("PSRAM: clock config failed\r\n");
+    Error_Handler();
+  }
+
+  if (BSP_XSPI_RAM_Init(0) != BSP_ERROR_NONE)
+  {
+    printf("PSRAM: init failed\r\n");
+    Error_Handler();
+  }
+  if (BSP_XSPI_RAM_EnableMemoryMappedMode(0) != BSP_ERROR_NONE)
+  {
+    printf("PSRAM: memory-mapped mode failed\r\n");
+    Error_Handler();
+  }
+
+  /* 간단한 읽기/쓰기 확인: 1 MB 간격으로 32곳(32 MB 전체) */
+  for (uint32_t i = 0U; i < 32U; i++)
+  {
+    p[i * (0x100000U / 4U)] = 0xA5000000U | i;
+  }
+  for (uint32_t i = 0U; i < 32U; i++)
+  {
+    if (p[i * (0x100000U / 4U)] != (0xA5000000U | i))
+    {
+      errors++;
+    }
+  }
+  printf("PSRAM: %s (XSPI1 %lu MHz)\r\n", (errors == 0U) ? "OK" : "TEST FAILED",
+         (unsigned long)(HAL_RCCEx_GetPeriphCLKFreq(RCC_PERIPHCLK_XSPI1) / 1000000U));
+  if (errors != 0U)
+  {
+    Error_Handler();
+  }
 }
 /* USER CODE END 4 */
 
@@ -358,6 +447,20 @@ void MPU_Config(void)
   MPU_AttributesInit.Attributes = INNER_OUTER(MPU_NOT_CACHEABLE);
 
   HAL_MPU_ConfigMemoryAttributes(&MPU_AttributesInit);
+
+  /* M3: 외부 PSRAM 32MB 비캐시. 영상 버퍼는 DCMIPP·VENC가 직접 읽고 쓰므로 캐시 관리를 피한다.
+     CubeN6 VENC_USB도 PSRAM을 비캐시로 둔다. */
+  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0x90000000;
+  MPU_InitStruct.LimitAddress = 0x91FFFFFF;
+  MPU_InitStruct.AttributesIndex = MPU_ATTRIBUTES_NUMBER0;
+  MPU_InitStruct.AccessPermission = MPU_REGION_ALL_RW;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.DisablePrivExec = MPU_PRIV_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
   /* Enables the MPU */
   HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 

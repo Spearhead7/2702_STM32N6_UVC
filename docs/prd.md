@@ -138,6 +138,8 @@ flowchart LR
 
 **버퍼 구성(안)**: DCMIPP 출력 NV12 프레임(1280×720×1.5 = 약 1.4 MB) 2개, VENC 참조 프레임과 작업 버퍼, H.264 출력 비트스트림 버퍼(각 512 KB) 2개를 외부 PSRAM에 둔다. [ST 위키](https://wiki.st.com/stm32mcu/wiki/Introduction_to_Hardware_Video_Encoding_with_STM32) 기준 720p에서 입력 프레임 2개가 2.64 MB, 참조 프레임과 VENC 버퍼가 2.92 MB로, 합계 약 6 MB를 확보한다.
 
+**1-A 실제 구성(M3)**: VENC JPEG 입력이 YUV422 인터리브(YUYV)라서 DCMIPP 출력은 YUV422(1280×720×2 = 1.8 MB)다. 캡처 버퍼 3개(최대 1080p 크기로 각 4 MB, 인코딩 중인 버퍼를 덮어쓰지 않게 하나 더 둠), 인코딩 프레임 큐 4×512 KB, VENC 작업 메모리 256 KB로 약 14 MB를 PSRAM에 둔다. PSRAM은 MPU 비캐시. 1-B에서 NV12·H.264 버퍼로 다시 잡는다.
+
 **USB 디스크립터 구성(안)**: 엔드포인트 번호는 제안값이며 예제 코드에 맞춰 조정한다.
 
 | 인터페이스 | 클래스 | 엔드포인트 | 용도 |
@@ -146,7 +148,7 @@ flowchart LR
 | IAD 1 → IF1 | CDC Data | 0x01 Bulk OUT, 0x81 Bulk IN (512 B) | 명령, 응답, 로그 |
 | IAD 2 → IF2 | UVC VideoControl | EP0만 사용 | 카메라 제어 요청, VC header의 baInterfaceNr = 3. 1-A는 bcdUVC = 0x0110, 1-B에서 UVC 1.5를 고르면 0x0150 |
 | IAD 2 → IF3 alt 0 | UVC VideoStreaming | 없음 | 스트림 대기(대역폭 0). 1-A는 MJPEG, 1-B는 H.264 포맷·프레임 디스크립터가 여기 들어간다 |
-| IAD 2 → IF3 alt 1~ | UVC VideoStreaming | 0x83 Isochronous IN | 1-A MJPEG는 1024 B × 최대 3(high-bandwidth), 1-B H.264는 1024 B × 1로 충분하다 |
+| IAD 2 → IF3 alt 1~ | UVC VideoStreaming | 0x83 Isochronous IN | 1024 B × 1(마이크로프레임당, 약 8 MB/s). 1-A MJPEG(100~200 KB/프레임, 3~6 MB/s)도 이 안에 들어가므로 high-bandwidth(×3)는 쓰지 않는다(USB DMA 미사용이라 FIFO 여유가 없음, M3 결정). 1-B H.264는 충분하다 |
 
 ## 7. CDC CLI 초안
 
@@ -185,7 +187,7 @@ n6uvc>
 | `cam exp [us]` | 수동 노출 시간 조회/설정 | 공통 |
 | `cam gain [dB]` | 수동 게인 조회/설정 | 공통 |
 | `cam awb <on\|off>` | 자동 화이트밸런스 켜기/끄기 | 공통 |
-| `enc jpegq [1-100]` | MJPEG 품질 조회/설정(1-B 성공 시 삭제) | 1-A |
+| `enc jpegq [0-9]` | MJPEG 품질 조회/설정. VENC JPEG 양자화 수준(0 최저 ~ 9 최고, 기본 6). 1-B 성공 시 삭제 | 1-A |
 | `enc bitrate [kbps]` | H.264 목표 비트레이트 조회/설정(1000~8000) | 1-B |
 | `enc gop [frames]` | IDR 주기 조회/설정(기본 30) | 1-B |
 | `enc idr` | 다음 프레임을 IDR로 강제 | 1-B |

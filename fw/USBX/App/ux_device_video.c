@@ -23,7 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "stream1.h"
+#include "vframe_queue.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,19 +39,33 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 #define UVC_PLAY_STATUS_STOP       0x00U
-#define UVC_PLAY_STATUS_READY      0x01U
 #define UVC_PLAY_STATUS_STREAMING  0x02U
-#define USBD_VIDEO_IMAGE_LAPS      80U
+
+/* UVC 페이로드 헤더(2바이트): bHeaderLength, bmHeaderInfo */
+#define UVC_HDR_LEN                2U
+#define UVC_HDR_FID                0x01U   /* 프레임마다 0/1 토글 */
+#define UVC_HDR_EOF                0x02U   /* 프레임 마지막 페이로드 */
+#define UVC_HDR_EOH                0x80U
+
+/* 스트림 시작 때 미리 채워 두는 페이로드 수(USBD_VIDEO_PAYLOAD_BUFFER_NUMBER보다 작게) */
+#define UVC_PREFILL_PAYLOADS       2U
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
-uint32_t payload_count;
 ULONG uvc_state;
 UX_DEVICE_CLASS_VIDEO *video;
 UX_DEVICE_CLASS_VIDEO_STREAM *stream_write;
 
-UCHAR video_frame_buffer[1024];
+/* 프레임 큐에서 빌려 와 보내는 중인 프레임 */
+static vfq_frame_t *uvc_frame = UX_NULL;
+static uint32_t     uvc_frame_off = 0U;
+static uint32_t     uvc_last_seq = 0U;
+static uint8_t      uvc_fid = 0U;
+
+/* 통계(디버그용) */
+volatile uint32_t   uvc_frames_sent = 0U;
+volatile uint32_t   uvc_empty_payloads = 0U;
 
 /* Video Probe data structure */
 static USBD_VideoControlTypeDef video_Probe_Control =
@@ -99,6 +113,7 @@ static USBD_VideoControlTypeDef video_Commit_Control =
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
 static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream);
+static VOID video_stream_reset(VOID);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -144,6 +159,9 @@ VOID USBD_VIDEO_Deactivate(VOID *video_instance)
   /* Reset the video streams */
   stream_write = UX_NULL;
 
+  uvc_state = UVC_PLAY_STATUS_STOP;
+  video_stream_reset();
+
   /* USER CODE END USBD_VIDEO_Deactivate */
 
   return;
@@ -162,22 +180,22 @@ VOID USBD_VIDEO_StreamChange(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
 {
   /* USER CODE BEGIN USBD_VIDEO_StreamChange */
 
-  /* Stop video payload loop back if stream closed */
+  /* 호스트가 영상을 닫음(대체 설정 0) */
   if (alternate_setting == 0U)
   {
-    /* Update State machine */
     uvc_state = UVC_PLAY_STATUS_STOP;
-
-    img_count--;
-
+    video_stream_reset();
     return;
   }
 
-  /* Update State machine */
-  uvc_state = UVC_PLAY_STATUS_READY;
+  /* 영상 시작: 가장 최근 프레임부터 보낸다 */
+  video_stream_reset();
+  uvc_state = UVC_PLAY_STATUS_STREAMING;
 
-  /* Write buffers until achieve threadshold */
-  video_write_payload(video_stream);
+  for (ULONG i = 0U; i < UVC_PREFILL_PAYLOADS; i++)
+  {
+    video_write_payload(video_stream);
+  }
 
   /* Start sending valid payloads in the Video class */
   ux_device_class_video_transmission_start(video_stream);
@@ -198,28 +216,11 @@ VOID USBD_VIDEO_StreamPayloadDone(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
                                   ULONG length)
 {
   /* USER CODE BEGIN USBD_VIDEO_StreamPayloadDone */
-  /* Check length is not NULL */
-  if (length != 0U)
+  UX_PARAMETER_NOT_USED(length);
+
+  /* 페이로드 하나가 나갈 때마다 하나를 채운다(보낼 프레임이 없으면 헤더만) */
+  if (uvc_state == UVC_PLAY_STATUS_STREAMING)
   {
-    payload_count = 0;
-
-    /* Update state machine */
-    uvc_state = UVC_PLAY_STATUS_STREAMING;
-
-    /* Prepare next payload */
-    video_write_payload(video_stream);
-  }
-  else
-  {
-    payload_count++ ;
-  }
-
-  if (payload_count == USBD_VIDEO_IMAGE_LAPS)
-  {
-    /* Update state machine */
-    uvc_state = UVC_PLAY_STATUS_READY;
-
-    /* Prepare next payload */
     video_write_payload(video_stream);
   }
   /* USER CODE END USBD_VIDEO_StreamPayloadDone */
@@ -380,124 +381,93 @@ ULONG USBD_VIDEO_StreamGetMaxPayloadBufferSize(VOID)
 /* USER CODE BEGIN 1 */
 
 /**
+  * @brief  보내던 프레임을 돌려주고 스트림 상태를 처음으로 돌린다.
+  */
+static VOID video_stream_reset(VOID)
+{
+  if (uvc_frame != UX_NULL)
+  {
+    vfq_release(uvc_frame);
+    uvc_frame = UX_NULL;
+  }
+  uvc_frame_off = 0U;
+}
+
+/**
   * @brief  video_write_payload
-            Manage the UVC data packets.
+  *         페이로드 하나(최대 MPS)를 만든다. 프레임 큐에서 가장 최근 JPEG을 빌려
+  *         (MPS - 2) 바이트씩 잘라 보내고, 마지막 조각에 EOF를 붙인다.
+  *         보낼 프레임이 없으면 헤더만 보낸다(호스트는 빈 페이로드를 무시한다).
+  *         USBX 영상 스레드 또는 USB 인터럽트(스트림 시작) 문맥에서 불린다.
   * @param  stream : Video class stream instance.
   * @retval none
   */
-VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
+static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
 {
   ULONG buffer_length;
   UCHAR *buffer;
-  ULONG usbd_video_ep_mps = stream->ux_device_class_video_stream_endpoint->ux_slave_endpoint_descriptor.wMaxPacketSize;
-  static ULONG length;
-  static uint8_t packet_index = 0;
-  const uint8_t *(*ImagePtr)= tImagesList;
-  uint32_t packet_count = (tImagesSizes[img_count])/(( uint16_t)(usbd_video_ep_mps - 2));
-  uint32_t packet_remainder =(tImagesSizes[img_count])%(( uint16_t)(usbd_video_ep_mps - 2));
-  static uint8_t  payload_header[2] = {0x02U, 0x00U};
-  static uint8_t *Pcktdata = video_frame_buffer;
+  ULONG mps;
+  ULONG chunk = 0U;
+  UCHAR info;
 
-  /* Get payload buffer */
-  ux_device_class_video_write_payload_get(stream, &buffer, &buffer_length);
-
-  /* Check UVC state*/
-  switch(uvc_state)
+  if (uvc_state != UVC_PLAY_STATUS_STREAMING)
   {
-    case UVC_PLAY_STATUS_READY:
-
-      length = 2U;
-
-      /* Add the packet header */
-      video_frame_buffer[0] = payload_header[0];
-      video_frame_buffer[1] = payload_header[1];
-
-      /* Copy video buffer in video frame buffer */
-      ux_utility_memory_copy(buffer, video_frame_buffer, length);
-
-      /* Commit payload buffer */
-      ux_device_class_video_write_payload_commit(stream, length);
-
-      break;
-
-    case UVC_PLAY_STATUS_STREAMING:
-
-      /* Reset video frame buffer */
-      ux_utility_memory_set(video_frame_buffer, 0, usbd_video_ep_mps);
-
-      /* Check if end of current image has been reached */
-      if (packet_index < packet_count)
-      {
-        /* Set the current packet size */
-        length = (uint16_t)usbd_video_ep_mps;
-
-        /* Get the pointer to the next packet to be transmitted */
-        Pcktdata = (uint8_t*)(*(ImagePtr + img_count) + packet_index * ((uint16_t)(usbd_video_ep_mps - 2U)));
-      }
-      else if(packet_index == packet_count)
-      {
-        /* Get the pointer to the next packet to be transmitted */
-        Pcktdata =(uint8_t*)(*(ImagePtr + img_count)+packet_index * ((uint16_t)(usbd_video_ep_mps - 2U)));
-
-        /* Set the current packet size */
-        length = (packet_remainder + 2);
-      }
-      else
-      {
-        /* New image to be started, send only the packet header */
-        length = 0;
-      }
-
-      if (length > 2U)
-      {
-        /* Check if this is the first packet in current image */
-        if(packet_index == 0U)
-        {
-          /* Set the packet start index */
-          payload_header[1] ^= 0x01U;
-        }
-
-        /* Copy the packet in the buffer */
-        ux_utility_memory_copy((video_frame_buffer + 2U), Pcktdata, (length - 2U));
-
-      }
-
-      /* Increment the packet count and check if it reached the end of current image buffer */
-      if (packet_index++ >= (packet_count + 1))
-      {
-        /* Reset the packet count to zero */
-        packet_index = 0U;
-
-        /* Move to the next image in the images table */
-        img_count++;
-
-        ux_utility_delay_ms(USBD_VIDEO_IMAGE_LAPS);
-
-        /* Check if images count has been reached, then reset to zero
-           (go back to first image in circular loop) */
-        if (img_count == IMG_NBR)
-        {
-          img_count = 0U;
-        }
-      }
-      else
-      {
-        /* Add the packet header */
-        video_frame_buffer[0] = payload_header[0];
-        video_frame_buffer[1] = payload_header[1];
-
-        /* Copy video buffer in video frame buffer */
-        ux_utility_memory_copy(buffer, video_frame_buffer, length);
-
-        /* Commit payload buffer */
-        ux_device_class_video_write_payload_commit(stream, length);
-      }
-      break;
-
-    case UVC_PLAY_STATUS_STOP:
-    default:
-      return;
+    return;
   }
+
+  if (ux_device_class_video_write_payload_get(stream, &buffer, &buffer_length) != UX_SUCCESS)
+  {
+    return;
+  }
+
+  mps = stream->ux_device_class_video_stream_endpoint->ux_slave_endpoint_descriptor.wMaxPacketSize & 0x7FFU;
+  if (mps > buffer_length)
+  {
+    mps = buffer_length;
+  }
+
+  /* 새 프레임 시작 */
+  if (uvc_frame == UX_NULL)
+  {
+    uvc_frame = vfq_acquire_latest(uvc_last_seq);
+    if (uvc_frame != UX_NULL)
+    {
+      uvc_frame_off = 0U;
+      uvc_fid ^= UVC_HDR_FID;
+    }
+  }
+
+  info = (UCHAR)(UVC_HDR_EOH | uvc_fid);
+
+  if (uvc_frame != UX_NULL)
+  {
+    chunk = uvc_frame->size - uvc_frame_off;
+    if (chunk > (mps - UVC_HDR_LEN))
+    {
+      chunk = mps - UVC_HDR_LEN;
+    }
+
+    ux_utility_memory_copy(buffer + UVC_HDR_LEN, uvc_frame->data + uvc_frame_off, chunk);
+    uvc_frame_off += chunk;
+
+    if (uvc_frame_off >= uvc_frame->size)
+    {
+      info |= UVC_HDR_EOF;
+      uvc_last_seq = uvc_frame->seq;
+      vfq_release(uvc_frame);
+      uvc_frame = UX_NULL;
+      uvc_frames_sent++;
+    }
+  }
+  else
+  {
+    uvc_empty_payloads++;
+  }
+
+  buffer[0] = (UCHAR)UVC_HDR_LEN;
+  buffer[1] = info;
+
+  ux_device_class_video_write_payload_commit(stream, UVC_HDR_LEN + chunk);
 }
 
 /* USER CODE END 1 */

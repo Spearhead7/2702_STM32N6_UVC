@@ -49,6 +49,9 @@ MEMORY
      RAM 끝 32K(0x341F8000~)는 MPU 비캐시 영역(USB HPCD 등). */
   ROM    (xrw)    : ORIGIN = 0x34180400,   LENGTH = 383K
   RAM    (xrw)    : ORIGIN = 0x341E0000,   LENGTH = 128K
+  /* 외부 PSRAM(APS256XX, 32MB, XSPI1 memory-mapped). main()에서 초기화한 뒤에만 쓸 수 있다.
+     MPU 비캐시. 영상 프레임·VENC 작업 메모리·인코딩 프레임 큐용. */
+  PSRAM  (xrw)    : ORIGIN = 0x90000000,   LENGTH = 32M
 }
 
 /* Sections */
@@ -202,6 +205,17 @@ SECTIONS
     . = . + _Min_Stack_Size;
     . = ALIGN(8);
   } >RAM
+  /* PSRAM 영역(IN_PSRAM). NOLOAD: 디버거가 굽지 않고, 시작 코드도 0으로 지우지 않는다. */
+  .psram_bss (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __psram_bss_start__ = .;
+    *(.psram_bss)
+    *(.psram_bss*)
+    . = ALIGN(32);
+    __psram_bss_end__ = .;
+  } >PSRAM
+
   .usbx_data 0x341F8000 (NOLOAD):
   {
     *(.UsbHpcdSection)

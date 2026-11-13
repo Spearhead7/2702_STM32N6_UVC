@@ -34,7 +34,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define CDC_ECHO_THREAD_STACK_SIZE   1024U
+#define CDC_ECHO_THREAD_STACK_SIZE   2048U
 #define CDC_ECHO_THREAD_PRIO         20U
 /* USER CODE END PD */
 

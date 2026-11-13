@@ -97,6 +97,17 @@
 									<listOptionValue builtIn="false" value="../USBPD/Target"/>
 									<listOptionValue builtIn="false" value="../USBX/App"/>
 									<listOptionValue builtIn="false" value="../USBX/Target"/>
+									<listOptionValue builtIn="false" value="../Video/Inc"/>
+									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/Common"/>
+									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/imx335"/>
+									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/aps256xx"/>
+									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/mx66uw1g45g"/>
+									<listOptionValue builtIn="false" value="../Middlewares/ST/STM32_ISP_Library/isp/Inc"/>
+									<listOptionValue builtIn="false" value="../Middlewares/ST/STM32_ISP_Library/evision/Inc"/>
+									<listOptionValue builtIn="false" value="../Middlewares/ST/VideoEncoder_EWL"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/VideoEncoder/inc"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/VideoEncoder/source/common"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/VideoEncoder/source/jpeg"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.228506707" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -108,9 +119,12 @@
 								<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.script.873601325" name="Linker Script (-T)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.script" value="${workspace_loc:/${ProjName}/STM32N657X0HXQ_AXISRAM2_fsbl.ld}" valueType="string"/>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.directories.759466897" name="Library search path (-L)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.directories" valueType="libPaths">
 									<listOptionValue builtIn="false" value="../Middlewares/ST/STM32_USBPD_Library/Core/lib"/>
+									<listOptionValue builtIn="false" value="../Middlewares/ST/STM32_ISP_Library/evision/Lib"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.libraries.1749765721" name="Libraries (-l)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.libraries" valueType="libs">
 									<listOptionValue builtIn="false" value=":USBPDCORE_PD3_FULL_CM55_wc32.a"/>
+									<listOptionValue builtIn="false" value=":libn6-evision-awb_gcc.a"/>
+									<listOptionValue builtIn="false" value=":libn6-evision-st-ae_gcc.a"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.input.1732895875" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.input">
 									<additionalInput kind="additionalinputdependency" paths="$(USER_OBJS)"/>
@@ -232,6 +246,17 @@
 									<listOptionValue builtIn="false" value="../USBPD/Target"/>
 									<listOptionValue builtIn="false" value="../USBX/App"/>
 									<listOptionValue builtIn="false" value="../USBX/Target"/>
+									<listOptionValue builtIn="false" value="../Video/Inc"/>
+									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/Common"/>
+									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/imx335"/>
+									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/aps256xx"/>
+									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/mx66uw1g45g"/>
+									<listOptionValue builtIn="false" value="../Middlewares/ST/STM32_ISP_Library/isp/Inc"/>
+									<listOptionValue builtIn="false" value="../Middlewares/ST/STM32_ISP_Library/evision/Inc"/>
+									<listOptionValue builtIn="false" value="../Middlewares/ST/VideoEncoder_EWL"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/VideoEncoder/inc"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/VideoEncoder/source/common"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/VideoEncoder/source/jpeg"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags.1823555764" name="Other flags" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.otherflags" useByScannerDiscovery="true" valueType="stringList">
 									<listOptionValue builtIn="false" value="-Wno-array-bounds"/>
@@ -246,9 +271,12 @@
 								<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.script.432941823" name="Linker Script (-T)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.script" value="${workspace_loc:/${ProjName}/STM32N657X0HXQ_AXISRAM2_fsbl.ld}" valueType="string"/>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.directories.1073462234" name="Library search path (-L)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.directories" valueType="libPaths">
 									<listOptionValue builtIn="false" value="../Middlewares/ST/STM32_USBPD_Library/Core/lib"/>
+									<listOptionValue builtIn="false" value="../Middlewares/ST/STM32_ISP_Library/evision/Lib"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.libraries.1932150515" name="Libraries (-l)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.option.libraries" valueType="libs">
 									<listOptionValue builtIn="false" value=":USBPDCORE_PD3_FULL_CM55_wc32.a"/>
+									<listOptionValue builtIn="false" value=":libn6-evision-awb_gcc.a"/>
+									<listOptionValue builtIn="false" value=":libn6-evision-st-ae_gcc.a"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.input.1977027697" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.linker.input">
 									<additionalInput kind="additionalinputdependency" paths="$(USER_OBJS)"/>

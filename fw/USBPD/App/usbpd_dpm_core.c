@@ -60,10 +60,10 @@ void TimerPE1function(void *pArg);
 /* Private typedef -----------------------------------------------------------*/
 
 #define OS_PE_PRIORITY                    1
-#define OS_PE_STACK_SIZE                  1024
+#define OS_PE_STACK_SIZE                  2048  /* 예제 1024: Debug(-O0)에서 CAD가 넘쳐 늘림 */
 
 #define OS_CAD_PRIORITY                   1
-#define OS_CAD_STACK_SIZE                 1024
+#define OS_CAD_STACK_SIZE                 2048  /* 예제 1024: Debug(-O0)에서 TCPP0203 ADC 설정 중 스택 오버플로 */
 
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/

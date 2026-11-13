@@ -56,6 +56,77 @@ void TCPP0203_PORT0_FLG_EXTI_IRQHANDLER(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* ---- HardFault 정보 출력 ----------------------------------------------------
+   폴트가 나면 원인 레지스터와 폴트 직전 PC/LR, 실행 중이던 ThreadX 스레드 이름을
+   USART1(ST-LINK 가상 COM, 115200)로 출력한다. 인터럽트·HAL에 기대지 않고
+   레지스터를 직접 쓴다(폴트 상황에서도 동작하도록). */
+#include "tx_api.h"
+
+extern TX_THREAD *_tx_thread_current_ptr;
+
+static void fault_putc(char c)
+{
+  while ((USART1->ISR & USART_ISR_TXE_TXFNF) == 0U)
+  {
+  }
+  USART1->TDR = (uint8_t)c;
+}
+
+static void fault_puts(const char *s)
+{
+  while (*s != '\0')
+  {
+    fault_putc(*s++);
+  }
+}
+
+static void fault_hex(const char *name, uint32_t v)
+{
+  static const char hex[] = "0123456789ABCDEF";
+  fault_puts(name);
+  fault_puts("=0x");
+  for (int i = 28; i >= 0; i -= 4)
+  {
+    fault_putc(hex[(v >> i) & 0xFU]);
+  }
+  fault_puts("\r\n");
+}
+
+void fault_dump(uint32_t *sp, uint32_t exc_return)
+{
+  fault_puts("\r\n*** HardFault ***\r\n");
+  fault_hex("PC   ", sp[6]);
+  fault_hex("LR   ", sp[5]);
+  fault_hex("xPSR ", sp[7]);
+  fault_hex("R0   ", sp[0]);
+  fault_hex("R1   ", sp[1]);
+  fault_hex("R2   ", sp[2]);
+  fault_hex("R3   ", sp[3]);
+  fault_hex("R12  ", sp[4]);
+  fault_hex("SP   ", (uint32_t)sp);
+  fault_hex("EXC  ", exc_return);
+  fault_hex("CFSR ", SCB->CFSR);
+  fault_hex("HFSR ", SCB->HFSR);
+  fault_hex("MMFAR", SCB->MMFAR);
+  fault_hex("BFAR ", SCB->BFAR);
+  fault_hex("SFSR ", SAU->SFSR);
+  fault_hex("SFAR ", SAU->SFAR);
+  fault_puts("THREAD ");
+  if ((_tx_thread_current_ptr != TX_NULL) && (_tx_thread_current_ptr->tx_thread_name != TX_NULL))
+  {
+    fault_puts(_tx_thread_current_ptr->tx_thread_name);
+  }
+  else
+  {
+    fault_puts("(none)");
+  }
+  fault_puts("\r\n");
+
+  while (1)
+  {
+  }
+}
+
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -90,16 +161,16 @@ void NMI_Handler(void)
 /**
   * @brief This function handles Hard fault interrupt.
   */
-void HardFault_Handler(void)
+/* naked: 컴파일러가 스택을 건드리기 전에 폴트 당시 스택 포인터를 넘긴다(.ioc 없음, 직접 관리) */
+__attribute__((naked)) void HardFault_Handler(void)
 {
-  /* USER CODE BEGIN HardFault_IRQn 0 */
-
-  /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
+  __asm volatile(
+    "tst   lr, #4      \n"
+    "ite   eq          \n"
+    "mrseq r0, msp     \n"
+    "mrsne r0, psp     \n"
+    "mov   r1, lr      \n"
+    "b     fault_dump  \n");
 }
 
 /**
@@ -327,4 +398,18 @@ void TCPP0203_PORT0_FLG_EXTI_IRQHANDLER(void)
   }
 }
 #endif /* TCPP0203_SUPPORT */
+
+/* M3: 카메라 인터럽트(CubeN6 VENC_USB stm32n6xx_it.c와 같음).
+   VENC_IRQHandler는 Middlewares/ST/VideoEncoder_EWL/ewl_impl.c에 있다. */
+#include "stm32n6570_discovery_camera.h"
+
+void CSI_IRQHandler(void)
+{
+  HAL_DCMIPP_CSI_IRQHandler(&hcamera_dcmipp);
+}
+
+void DCMIPP_IRQHandler(void)
+{
+  BSP_CAMERA_IRQHandler(0);
+}
 /* USER CODE END 1 */

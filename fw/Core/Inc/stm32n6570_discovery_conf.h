@@ -67,6 +67,9 @@ extern "C" {
 #define BSP_SD_TX_IT_PRIORITY               15U
 #define BSP_TS_IT_PRIORITY                  15U
 
+/* Camera: MB1854B (IMX335) */
+#define USE_IMX335_SENSOR                   1U
+
 #ifdef __cplusplus
 }
 #endif

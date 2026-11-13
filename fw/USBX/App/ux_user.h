@@ -121,7 +121,7 @@
    though the compiler's equivalent of the -D option.  */
 
 /* Define USBX Generic Thread Stack Size.  */
-/* #define UX_THREAD_STACK_SIZE                             (2 * 1024) */
+#define UX_THREAD_STACK_SIZE                             (2 * 1024)  /* M3: UVC 스레드에서 프레임 큐 복사(Debug -O0 여유) */
 
 /* Define USBX Host Enum Thread Stack Size. The default is to use UX_THREAD_STACK_SIZE */
 /* #define UX_HOST_ENUM_THREAD_STACK_SIZE                   UX_THREAD_STACK_SIZE  */
@@ -253,7 +253,7 @@
    is 2048 bytes but can be reduced in memory constrained environments. For cd-rom support in the storage
    class, this value cannot be less than 2048.  */
 
-#define UX_SLAVE_REQUEST_DATA_MAX_LENGTH                    512
+#define UX_SLAVE_REQUEST_DATA_MAX_LENGTH                    1024  /* M3: UVC isochronous MPS 1024 B */
 
 /* Defined, this enables processing of Get String Descriptor requests with zero Language ID.
    The first language ID in the language ID framework will be used if the request has a zero

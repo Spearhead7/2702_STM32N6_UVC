@@ -23,7 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "video_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -63,6 +63,9 @@ UINT App_ThreadX_Init(VOID *memory_ptr)
 
   /* USER CODE END App_ThreadX_MEM_POOL */
   /* USER CODE BEGIN App_ThreadX_Init */
+  (void)memory_ptr;
+  /* M3: 카메라 → 인코더 → 프레임 큐 스레드(USB와 무관하게 부팅 후 계속 돈다) */
+  ret = video_app_init();
   /* USER CODE END App_ThreadX_Init */
 
   return ret;

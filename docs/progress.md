@@ -56,7 +56,7 @@
 - [ ] 태블릿 UVC 뷰어에서 ① MJPEG 영상 확인. 태블릿 기종과 앱 이름 기록
   - 외부 플래시에는 ①(FSBL + 앱)이 아직 남아 있을 것이다(③은 개발 모드로 실행했으므로). 부트 스위치를 플래시 부팅으로 두고 USB1(CN18)을 OTG로 태블릿에 연결하면 바로 확인할 수 있다.
 
-## M2 composite 인식(MJPEG 가짜 영상) — 보드 확인 대기
+## M2 composite 인식(MJPEG 가짜 영상) — 완료
 
 ### 2026-11-13 (Claude)
 
@@ -88,7 +88,85 @@
 - 고정 영상 `stream1.h`(약 95 KB)는 M3에서 실제 카메라로 바꾸면 삭제한다.
 - 확인 절차: `docs/m2-guide.md`.
 
-**남은 것 (M2 완료 기준)**
+### 2026-11-13 1차 실행: HardFault (사용자 → Claude)
 
-- [ ] Windows에서 카메라와 COM 포트 동시 인식
-- [ ] CDC 에코 통과(영상 스트리밍 중에도)
+- 증상: 실행 직후 HardFault. `CFSR=0x00100000`(UsageFault STKOF, 스택 오버플로), 스레드 `CAD`(USBPD), PC = `HAL_RCCEx_PeriphCLKConfig` ← `PWR_TCPP0203_Configure_ADC`.
+- 원인: Debug(-O0)에서 두 함수 스택만 928 B인데 CAD 스레드 스택이 1024 B(ST 예제값). M33/M55는 PSPLIM으로 넘침을 바로 잡아낸다.
+- 조치: CAD·PE 스택 1024 → 2048, USBPD 풀 5000 → 8K, USBX 앱 스레드·CDC 에코 스레드 1024 → 2048.
+- HardFault 핸들러가 원인 레지스터·PC/LR·스레드 이름을 USART1로 출력하도록 바꿨다(`Core/Src/stm32n6xx_it.c`). PC는 `arm-none-eabi-addr2line -f -e Debug/STM32N6_UVC.elf <PC>`로 찾는다.
+
+### 2026-11-13 2차 실행: 사용자 확인 결과 (스택 수정 후)
+
+| 항목 | 결과 |
+|---|---|
+| 디버그 로그 | 배너, `USB: start`, `CDC: activate` 출력 |
+| 장치 관리자 | COM 포트(USB 직렬 장치)와 카메라 동시 인식, 노란 느낌표 없음 |
+| CDC 에코 | 정상(친 글자가 한 번 돌아옴, Tera Term 로컬 에코 꺼짐 상태) |
+| 영상 | Windows 카메라 앱에서 ST 로고 영상, 320×236 |
+| 동시 동작 | 영상 스트리밍 중에도 에코 정상, 카메라 앱을 다시 열어도 영상 나옴 |
+
+**M2 완료 기준 (PRD 9장)**
+
+- [x] Windows에서 카메라와 COM 포트 동시 인식
+- [x] CDC 에코 통과(영상 스트리밍 중에도)
+
+참고: 처음 보고에서 "영상 중 에코 안 됨"은 Tera Term 화면에 글자가 두 번 찍혀야 에코라고 오해한 것이었다. 로컬 에코가 꺼져 있으면 화면의 글자 한 번이 보드가 돌려보낸 것이다(m2-guide.md 3장).
+
+## M3 실제 카메라 MJPEG 720p30 — 보드 확인 대기
+
+### 2026-11-13 (Claude)
+
+**설계**
+
+- 카메라·인코더는 USB와 무관하게 부팅 후 계속 돈다(`video` 스레드, 우선순위 15). 결과는 **프레임 큐**(`vframe_queue`)로만 나가고, UVC는 큐의 소비자 하나다. 2단계 SD 녹화는 같은 큐의 두 번째 소비자로 붙는다.
+- 영상 경로: IMX335(2592×1944 RAW10, CSI-2 2 lane 1600 Mbps) → DCMIPP PIPE1(ISP 디모자이크·AE·AWB → **16:9 크롭 2592×1458** → 1280×720 축소 → YUV422 YUYV) → PSRAM 캡처 버퍼 3개 → VENC JPEG(4:2:0, qLevel 6) → 프레임 큐 4×512 KB(PSRAM) → UVC.
+  - VENC_USB 예제는 4:3 전체를 16:9로 줄여 화면이 찌그러진다. 크롭을 먼저 한다.
+  - 캡처 버퍼를 3개로 두고, 다음 주소를 고를 때 인코딩 중인 버퍼는 건너뛴다.
+- 프레임 큐: 소비자는 '가장 최근 프레임'을 참조 카운트로 빌린다. 빈 슬롯이 없으면 아무도 빌리지 않은 가장 오래된 프레임을 덮어쓴다(인코더는 멈추지 않음).
+- UVC: 페이로드가 하나 나갈 때마다(USBX 영상 스레드의 payload done) 하나를 채운다. 보낼 프레임이 없으면 헤더만 보낸다(VENC_USB는 바쁜 대기). 스트림 시작 때 최신 프레임부터 보낸다.
+- 해상도·fps·JPEG 품질은 `Video/Inc/video_cfg.h`의 설정 구조체 하나에 모았다. 버퍼는 1080p 최대 크기로 잡았다.
+- PSRAM은 MPU 비캐시(VENC_USB와 같음). CPU는 USB로 보낼 JPEG 조각만 읽는다.
+- HSLV(VDDIO3 1.8V 고속 패드) OTP 퓨즈: ST 예제 FSBL은 이 퓨즈를 굽는다(되돌릴 수 없음). 이 펌웨어는 **읽기만** 하고, 꺼져 있으면 PSRAM을 200 → 100 MHz로 낮춘다.
+
+**가져온 소스(STM32CubeN6 V1.4.1, `C:\Users\<사용자>\STM32Cube\Repository\STM32Cube_FW_N6_V1.4.1`)**
+
+| 위치(fw/) | 출처 |
+|---|---|
+| `Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_{dcmipp,xspi,bsec}.c`, `stm32n6xx_ll_venc.c` | `Drivers/STM32N6xx_HAL_Driver/Src` |
+| `Drivers/BSP/STM32N6570-DK/stm32n6570_discovery_xspi.c` | `Drivers/BSP/STM32N6570-DK` |
+| `Drivers/BSP/STM32N6570-DK/stm32n6570_discovery_camera.c` | `Projects/STM32N6570-DK/Applications/VENC/VENC_USB/Appli/Core/Src/Patch` (ISP 통합 패치판) |
+| `Drivers/BSP/Components/{imx335,aps256xx,mx66uw1g45g}` | `Drivers/BSP/Components` |
+| `Middlewares/ST/STM32_ISP_Library` (isp: Inc, Src 3개 / evision: Inc, Lib `*_gcc.a`) | `Middlewares/ST/STM32_ISP_Library` |
+| `Middlewares/ST/VideoEncoder_EWL` (ewl_impl.c/h) | `Middlewares/ST/VideoEncoder_EWL` |
+| `Middlewares/Third_Party/VideoEncoder` (inc, source/common 4개, source/jpeg) | `Middlewares/Third_Party/VideoEncoder` (H.264 소스는 1-B에서 추가) |
+| `Core/Inc/{ewl_conf,aps256xx_conf,mx66uw1g45g_conf}.h` | VENC_USB `Appli/Core/Inc` |
+
+**변경 파일**
+
+| 파일 | 내용 |
+|---|---|
+| `Video/Inc,Src` (신규) | `video_app.c`(카메라·인코딩 스레드, `MX_DCMIPP_Init` 재정의, 프레임 콜백, 5초 통계), `jpeg_enc.c`(VENC JPEG, EWL 풀 256 KB), `vframe_queue.c`, `video_cfg.h` |
+| `Core/Src/main.c` | 배너 M3, `PSRAM_Init()`(XSPI1 = IC3 PLL1/6 200 MHz 또는 /12 100 MHz, memory-mapped, 32곳 읽기/쓰기 확인), RIF에 DCMIPP·CSI·VENC 추가, MPU region1 PSRAM 비캐시 |
+| `Core/Src/app_threadx.c` | `video_app_init()` 호출 |
+| `Core/Src/stm32n6xx_it.c` | `CSI_IRQHandler`, `DCMIPP_IRQHandler` (VENC_IRQHandler는 ewl_impl.c) |
+| `Core/Inc/stm32n6xx_hal_conf.h` | DCMIPP, XSPI, BSEC 모듈 켬 |
+| `Core/Inc/stm32n6570_discovery_conf.h` | `USE_IMX335_SENSOR 1U` |
+| `STM32N657X0HXQ_AXISRAM2_fsbl.ld` | PSRAM 32M 영역, `.psram_bss (NOLOAD)` |
+| `USBX/App/ux_device_video.c` | 고정 영상 → 프레임 큐 스트리밍(헤더 EOH/FID/EOF) |
+| `USBX/App/ux_device_descriptors.h` | 1280×720, HS 30fps, MPS 1024, 최대 프레임 512 KB |
+| `USBX/App/ux_user.h` | `UX_SLAVE_REQUEST_DATA_MAX_LENGTH` 512 → 1024, `UX_THREAD_STACK_SIZE` 2K |
+| `USBX/App/app_usbx.h`, `AZURE_RTOS/App/app_azure_rtos_config.h` | USBX 메모리 20K → 28K, 풀 28K → 36K |
+| `Core/Src/usb_otg.c` | Tx3(영상) FIFO 0x100 → 0x200 word. 합계 0x370 |
+| `USBX/App/stream1.h` | 삭제(M2 고정 영상) |
+| `.cproject` | include 경로 11개, evision 라이브러리 2개(Debug/Release) |
+
+**빌드**: Debug(text 315 KB) / Release(text 201 KB) 모두 0 errors. 경고 2개는 ST VideoEncoder 소스(`encasiccontroller_v2.c`, `encpreprocess.c`)의 `-Wint-in-bool-context`라 고치지 않는다. 내부 RAM 사용 약 74 KB / 96 KB(비캐시 32K 제외), PSRAM 14.1 MB / 32 MB.
+
+**보드에서 확인할 위험**
+
+- PSRAM 200 MHz 안정성(HSLV 퓨즈 상태에 따름).
+- DCMIPP 다음 주소가 섀도 레지스터라 프레임 끝 인터럽트가 늦으면 한 프레임 늦게 반영될 수 있다(화면 찢어짐으로 보임).
+- USB 대역폭: 1024 B × 8000/s ≈ 8 MB/s → 30fps면 프레임당 약 270 KB까지. JPEG이 크면 fps가 떨어진다. 그때는 qLevel을 낮춘다.
+- PRD 5장은 MJPEG에 high-bandwidth(1024×3)를 적어 두었지만, USB DMA를 쓰지 않는 지금은 FIFO가 부족해 1024×1로 했다(PRD 고침).
+
+확인 절차: `docs/m3-guide.md`.

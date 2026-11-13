@@ -61,8 +61,8 @@ void MX_USB1_OTG_HS_PCD_Init(void)
   /* USER CODE BEGIN USB1_OTG_HS_Init 2 */
 
   /* FIFO 단위는 32비트 word, 전체 약 1024 word.
-     합계 0x100+0x10+0x40+0x10+0x100 = 0x270 word.
-     isochronous IN(영상)은 FIFO가 MPS(512 B = 128 word)보다 커야 한다. */
+     합계 0x100+0x10+0x40+0x10+0x200 = 0x370 word.
+     isochronous IN(영상)은 FIFO가 MPS(M3: 1024 B = 256 word)보다 커야 한다(2패킷분). */
 
   /* Rx FIFO: 모든 OUT 공용 (CDC bulk OUT 512 B 포함) */
   HAL_PCDEx_SetRxFiFo(&hpcd_USB_OTG_HS1, 0x100);
@@ -77,7 +77,7 @@ void MX_USB1_OTG_HS_PCD_Init(void)
   HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS1, 2, 0x10);
 
   /* Tx FIFO 3: UVC video isochronous IN (0x83) */
-  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS1, 3, 0x100);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS1, 3, 0x200);
 
   /* USER CODE END USB1_OTG_HS_Init 2 */
 
