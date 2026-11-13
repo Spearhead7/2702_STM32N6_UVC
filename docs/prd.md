@@ -4,7 +4,7 @@
 
 ## 1. 개요
 
-STM32N6570-DK와 IMX335 카메라 모듈로 1280×720 30fps를 H.264로 압축해 보내는 USB UVC 카메라를 만든다. 같은 USB 케이블 하나에 CDC-ACM 가상 COM 포트를 함께 올려, 카메라 제어와 상태 조회를 할 수 있게 한다.
+STM32N6570-DK와 IMX335 카메라 모듈로 1280×720 30fps를 보내는 USB UVC 카메라를 만든다. 먼저 MJPEG로 영상이 나오는지 확인하고(1-A), 그다음 H.264로 바꿔 확정한다(1-B). 같은 USB 케이블 하나에 CDC-ACM 가상 COM 포트를 함께 올려, 카메라 제어와 상태 조회를 할 수 있게 한다.
 
 - **배경**: N6에는 MIPI CSI-2, DCMIPP와 ISP, 하드웨어 비디오 인코더(VENC, H.264/JPEG), USB 2.0 HS가 모두 들어 있다. 그래서 외부 브리지 칩 없이 단일 MCU로 UVC 카메라를 만들 수 있다.
 - **문서 범위**: DK 보드에서 동작하는 펌웨어 프로토타입(PoC)까지 다룬다. 양산용 커스텀 보드, 기구, 인증은 범위 밖이다.
@@ -16,7 +16,7 @@ STM32N6570-DK와 IMX335 카메라 모듈로 1280×720 30fps를 H.264로 압축�
 
 | 단계 | 내용 | 다음 단계로 넘어가는 기준 |
 | --- | --- | --- |
-| **1단계 UVC 영상 확인 (이 PRD)** | IMX335 → ISP → VENC H.264 720p30 → USB UVC → 태블릿 뷰어. USB CDC로 설정·상태 확인 | 720p30 H.264가 태블릿에 끊김 없이 표시 |
+| **1단계 UVC 영상 확인 (이 PRD)** | IMX335 → ISP → 720p30 MJPEG(1-A) 다음 H.264(1-B) → USB UVC. Windows PC에서 개발, 태블릿 뷰어로 최종 확인, CDC로 설정·상태 | 720p30 H.264가 PC와 태블릿에 끊김 없이 표시 |
 | 2단계 SD 카드 녹화 | 1080p15 H.264 상시 녹화, 파일 분할과 오래된 파일 덮어쓰기. UVC는 영상 확인용 도구로 유지(제안) | 24시간 연속 녹화, 프레임 누락 없음 |
 | 3단계 AI 사람 인식 | NPU로 사람 검출, ROI 안 검출은 이벤트로 기록(녹화본에 BBox 없음). DCMIPP에서 녹화용 1080p와 AI용 축소 영상을 동시에 출력 | 1080p15 녹화를 유지하며 AI 동작 |
 | 4단계 1CH DVR 완성 | UVC 제거. 화면 출력 + USB 마우스 UI로 ROI와 메뉴 설정. USB 포트는 장치(UVC)에서 호스트(마우스)로 바뀜 | — |
@@ -37,7 +37,7 @@ PC에 드라이버를 따로 설치하지 않고도 표준 카메라와 COM 포�
 **목표**
 
 1. 하나의 USB HS 포트에서 UVC와 CDC-ACM을 합친 composite 장치로 인식된다.
-2. 1280×720 H.264 영상을 30fps로 끊김 없이 보낸다.
+2. 1280×720 30fps 영상을 끊김 없이 보낸다. 1-A는 MJPEG, 1-B는 H.264다.
 3. Windows 10/11과 Linux(UVC 드라이버)의 기본 드라이버만으로 영상과 COM 포트가 모두 동작한다.
 4. CDC로 카메라 설정(노출, 화이트밸런스 등)과 상태(fps, 온도, 오류)를 주고받는다.
 5. 영상 스트리밍 중에도 CDC 통신이 끊기거나 느려지지 않는다.
@@ -45,18 +45,18 @@ PC에 드라이버를 따로 설치하지 않고도 표준 카메라와 COM 포�
 **비목표(이번 버전에서 하지 않음)**
 
 - 무압축(YUY2/NV12) 720p30 전송: USB HS 대역폭을 넘어서 불가능하다(5장 참고).
-- MJPEG 주 포맷: H.264를 받지 못하는 호스트를 위한 보조 포맷으로만 검토한다(F-04).
+- Linux 호스트에서의 개발·검증: 개발은 Windows PC 기준으로 한다.
 - 1080p, SD 카드 녹화, AI 사람 인식, 화면 출력과 마우스 UI: 2~4단계에서 다룬다. 오디오(UAC)는 계획에 없다.
 - USB 외의 물리 UART 브리지(필요하면 10장 미결 사항에서 결정).
 
 ## 3. 사용 시나리오
 
-주 사용자는 개발 중인 펌웨어를 검증하는 개발자다. 주 호스트는 UVC 뷰어 앱을 설치한 태블릿이고, CDC 확인은 PC에서 한다.
+주 사용자는 개발 중인 펌웨어를 검증하는 개발자다. 개발과 디버깅은 Windows PC에서 하고(영상과 CDC를 한 대에서 동시에 확인), 최종 확인은 UVC 뷰어 앱을 설치한 태블릿에서 한다.
 
 | # | 상황 | 사용자 행동 | 기대 결과 |
 | --- | --- | --- | --- |
 | S1 | 처음 연결 | USB-C 케이블로 PC에 꽂는다 | 5초 안에 카메라 1개와 COM 포트 1개가 장치 관리자에 나타난다 |
-| S2 | 영상 확인 | 태블릿에 USB-C(OTG)로 연결하고 UVC 뷰어 앱을 연다(보조: PC의 VLC, ffplay) | 720p30 H.264가 선택 목록에 보이고 재생된다 |
+| S2 | 영상 확인 | Windows PC에서 카메라 앱이나 VLC를 연다. 최종 확인은 태블릿에 USB-C(OTG)로 연결해 UVC 뷰어 앱으로 한다 | 720p30(1-A MJPEG, 1-B H.264)이 선택 목록에 보이고 재생된다 |
 | S3 | 설정 변경 | 터미널(Tera Term 등)이나 자체 앱에서 CDC로 명령을 보낸다 | 영상이 멈추지 않고 설정이 바로 반영되며 응답이 온다 |
 | S4 | 상태 감시 | 호스트가 주기적으로 상태를 요청한다 | fps, 프레임 크기, 오류 카운터를 받는다 |
 | S5 | 재연결 | 케이블을 뽑았다 다시 꽂거나 호스트가 절전 모드에서 깨어난다 | 보드 리셋 없이 다시 인식되고 스트리밍이 재개된다 |
@@ -68,14 +68,14 @@ P0은 PoC에 반드시 들어가야 하는 기능이고, P1은 있으면 좋은 
 | ID | 영역 | 요구사항 | 우선순위 |
 | --- | --- | --- | --- |
 | F-01 | USB | 하나의 USB OTG HS 포트에서 CDC-ACM(인터페이스 2개)과 UVC(VC/VS 인터페이스 2개)를 IAD로 묶은 composite 장치로 인식된다 | P0 |
-| F-02 | UVC | H.264 포맷 디스크립터로 1280×720 30fps를 제공한다. 페이로드 방식(UVC 1.5 H.264, UVC 1.1 frame-based H.264, MPEG-2 TS)은 M2에서 호환성 시험 후 확정한다 | P0 |
-| F-03 | UVC | 호스트의 Probe/Commit 요청에 응답하고, 스트림을 열면 SPS/PPS와 IDR 프레임부터 보낸다. 스트림을 닫으면 카메라와 인코더를 정지한다 | P0 |
-| F-04 | UVC | H.264를 받지 못하는 호스트를 위해 1280×720 30fps MJPEG를 보조 포맷으로 제공한다(VENC JPEG 모드) | P1 |
+| F-02 | UVC (1-A) | UVC 1.1 MJPEG 포맷 디스크립터로 1280×720 30fps를 제공한다. Windows 카메라 앱과 태블릿 뷰어에서 별도 설정 없이 재생되어야 한다 | P0 |
+| F-03 | UVC (1-B) | H.264 포맷 디스크립터로 1280×720 30fps를 제공한다. 페이로드 방식(UVC 1.5 H.264, UVC 1.1 frame-based H.264, MPEG-2 TS)은 M4에서 Windows와 태블릿 호환성 시험 후 확정한다 | P0 |
+| F-04 | UVC | 호스트의 Probe/Commit 요청에 응답하고, 스트림을 열고 닫을 때 카메라와 인코더를 시작/정지한다. H.264는 스트림 시작 시 SPS/PPS와 IDR 프레임부터 보낸다 | P0 |
 | F-05 | UVC | 밝기, 대비, 화이트밸런스 등 UVC 표준 Processing Unit 컨트롤을 지원한다 | P2 |
-| F-06 | 카메라 | IMX335를 MIPI CSI-2로 받아 DCMIPP와 ISP를 거쳐 1280×720 NV12(YUV 4:2:0)를 만든다(센서 출력에서 크롭 또는 다운스케일) | P0 |
+| F-06 | 카메라 | IMX335를 MIPI CSI-2로 받아 DCMIPP와 ISP를 거쳐 1280×720 YUV를 만든다(센서 출력에서 크롭 또는 다운스케일) | P0 |
 | F-07 | 카메라 | 자동 노출(AE)과 자동 화이트밸런스(AWB)가 동작한다 | P0 |
-| F-08 | 인코딩 | 하드웨어 인코더(VENC)로 H.264를 만든다. Baseline 또는 Main profile, Level 3.1, B-프레임 없음(I/P만), 기본 CBR 4 Mbps(설정 가능) | P0 |
-| F-09 | 인코딩 | IDR 주기를 설정할 수 있고(기본 30프레임 = 1초), 스트림 시작이나 CDC 명령 시 즉시 IDR을 만든다 | P0 |
+| F-08 | 인코딩 (1-A) | 하드웨어로 MJPEG를 만든다(VENC JPEG 모드). 품질(Q) 값을 바꿀 수 있다 | P0 |
+| F-09 | 인코딩 (1-B) | VENC로 H.264를 만든다. Baseline 또는 Main profile, Level 3.1, B-프레임 없음(I/P만), 기본 CBR 4 Mbps, IDR 주기 기본 30프레임(1초), 명령 시 즉시 IDR | P0 |
 | F-10 | CDC | PC에서 표준 COM 포트로 열리고, 기본 설정은 115200 8N1이다(USB에서는 설정값일 뿐 실제 속도를 제한하지 않는다) | P0 |
 | F-11 | CDC | 7장의 명령 프로토콜로 설정 조회/변경과 상태 조회를 처리한다 | P0 |
 | F-12 | CDC | 디버그 로그를 CDC로 출력한다(레벨 설정 가능) | P1 |
@@ -85,7 +85,7 @@ P0은 PoC에 반드시 들어가야 하는 기능이고, P1은 있으면 좋은 
 
 ## 5. 비기능 요구사항
 
-720p30은 압축해야만 USB HS에 들어간다. H.264는 필요한 대역폭이 USB 한계의 약 2%라서 여유가 크다.
+720p30은 압축해야만 USB HS에 들어간다. 1-A의 MJPEG는 USB 한계의 12~24%, 1-B의 H.264는 약 2%를 쓴다. 둘 다 여유가 있다.
 
 **대역폭 계산**
 
@@ -93,8 +93,8 @@ P0은 PoC에 반드시 들어가야 하는 기능이고, P1은 있으면 좋은 
 | --- | --- | --- | --- |
 | YUY2 무압축 | 1,843,200 B | 55.3 MB/s | 225%, 불가 |
 | NV12 무압축 | 1,382,400 B | 41.5 MB/s | 169%, 불가 |
-| MJPEG (추정 Q 75~85) | 100~200 KB | 3~6 MB/s | 12~24%, 가능 |
-| H.264 CBR 4 Mbps (채택) | 평균 약 17 KB, IDR은 수 배 | 0.5 MB/s | 약 2%, 가능 |
+| MJPEG Q 75~85 (1-A) | 100~200 KB | 3~6 MB/s | 12~24%, 가능 |
+| H.264 CBR 4 Mbps (1-B) | 평균 약 17 KB, IDR은 수 배 | 0.5 MB/s | 약 2%, 가능 |
 
 USB HS isochronous 한계는 마이크로프레임(125 µs)마다 3 × 1024바이트를 보내는 high-bandwidth 설정 기준 이론값이다. H.264 비트레이트는 화질을 보며 2~8 Mbps 범위에서 PoC 중에 정한다. IDR 프레임은 P 프레임보다 수 배 크므로 출력 버퍼와 dwMaxVideoFrameBufferSize는 IDR 기준으로 잡는다.
 
@@ -112,8 +112,8 @@ USB HS isochronous 한계는 마이크로프레임(125 µs)마다 3 × 1024바�
 
 **호환성**
 
-- 주 호스트: USB OTG를 지원하는 Android 태블릿 + UVC 뷰어 앱. Android 앱은 자체 유저스페이스 UVC 드라이버를 쓰므로, H.264 UVC 지원 여부는 앱마다 다르다(예: ShenYao의 USB Camera 앱은 H.264 UVC를 지원한다고 밝힌다). 보조 호스트: Windows 10/11, Ubuntu 22.04 이상(CDC 확인과 디버깅용).
-- 확인할 앱: 태블릿의 UVC 뷰어 앱(필수), PC의 VLC·ffplay(보조).
+- 개발 호스트: Windows 10/11 PC(카메라 앱, VLC, 장치 관리자, USB Device Tree Viewer, Wireshark + USBPcap). 최종 확인 호스트: USB OTG를 지원하는 Android 태블릿 + UVC 뷰어 앱. Android 앱은 자체 유저스페이스 UVC 드라이버를 쓰므로, H.264 UVC 지원 여부는 앱마다 다르다(예: ShenYao의 USB Camera 앱은 H.264 UVC를 지원한다고 밝힌다). Linux는 사용하지 않는다.
+- 확인할 앱: Windows 카메라 앱·VLC(개발 중), 태블릿의 UVC 뷰어 앱(단계마다 최종 확인).
 - 호스트 포트: USB 2.0 HS 이상. USB 3.x 포트와 허브에서도 동작해야 한다.
 
 ## 6. 시스템 아키텍처
@@ -124,7 +124,7 @@ USB HS isochronous 한계는 마이크로프레임(125 µs)마다 3 × 1024바�
 flowchart LR
     subgraph DK["STM32N6570-DK"]
         SENSOR["IMX335 센서<br/>MIPI CSI-2"] --> ISP["DCMIPP + ISP<br/>720p NV12, AE/AWB"]
-        ISP --> JPEG["H.264 인코더(VENC)<br/>I/P만, CBR 4 Mbps"]
+        ISP --> JPEG["VENC 인코더<br/>1-A MJPEG → 1-B H.264"]
         JPEG -- "압축 프레임(PSRAM)" --> UVC["USBX UVC<br/>isochronous IN"]
         CMD["CDC 명령 처리<br/>ThreadX 태스크"] <--> CDC["USBX CDC-ACM<br/>bulk IN/OUT"]
         CMD -- "센서·ISP 설정" --> ISP
@@ -134,7 +134,7 @@ flowchart LR
     OTG <--> PC["PC 호스트<br/>카메라 앱 / COM 포트"]
 ```
 
-영상은 센서에서 ISP와 H.264 인코더를 거쳐 UVC로 한 방향으로만 흐른다. CDC 명령은 양방향으로 오가고, 필요하면 센서와 ISP 설정을 바꾼다.
+영상은 센서에서 ISP와 VENC 인코더(1-A MJPEG, 1-B H.264)를 거쳐 UVC로 한 방향으로만 흐른다. CDC 명령은 양방향으로 오가고, 필요하면 센서와 ISP 설정을 바꾼다.
 
 **버퍼 구성(안)**: DCMIPP 출력 NV12 프레임(1280×720×1.5 = 약 1.4 MB) 2개, VENC 참조 프레임과 작업 버퍼, H.264 출력 비트스트림 버퍼(각 512 KB) 2개를 외부 PSRAM에 둔다. [ST 위키](https://wiki.st.com/stm32mcu/wiki/Introduction_to_Hardware_Video_Encoding_with_STM32) 기준 720p에서 입력 프레임 2개가 2.64 MB, 참조 프레임과 VENC 버퍼가 2.92 MB로, 합계 약 6 MB를 확보한다.
 
@@ -144,9 +144,9 @@ flowchart LR
 | --- | --- | --- | --- |
 | IAD 1 → IF0 | CDC Communication | 0x82 Interrupt IN | 시리얼 상태 알림 |
 | IAD 1 → IF1 | CDC Data | 0x01 Bulk OUT, 0x81 Bulk IN (512 B) | 명령, 응답, 로그 |
-| IAD 2 → IF2 | UVC VideoControl | EP0만 사용 | 카메라 제어 요청, VC header의 baInterfaceNr = 3, UVC 1.5이면 bcdUVC = 0x0150 |
-| IAD 2 → IF3 alt 0 | UVC VideoStreaming | 없음 | 스트림 대기(대역폭 0). H.264 포맷·프레임 디스크립터가 여기 들어간다 |
-| IAD 2 → IF3 alt 1~ | UVC VideoStreaming | 0x83 Isochronous IN (1024 B × 1) | H.264 전송. 4 Mbps는 마이크로프레임당 1패킷(최대 8.2 MB/s)으로 충분하다 |
+| IAD 2 → IF2 | UVC VideoControl | EP0만 사용 | 카메라 제어 요청, VC header의 baInterfaceNr = 3. 1-A는 bcdUVC = 0x0110, 1-B에서 UVC 1.5를 고르면 0x0150 |
+| IAD 2 → IF3 alt 0 | UVC VideoStreaming | 없음 | 스트림 대기(대역폭 0). 1-A는 MJPEG, 1-B는 H.264 포맷·프레임 디스크립터가 여기 들어간다 |
+| IAD 2 → IF3 alt 1~ | UVC VideoStreaming | 0x83 Isochronous IN | 1-A MJPEG는 1024 B × 최대 3(high-bandwidth), 1-B H.264는 1024 B × 1로 충분하다 |
 
 ## 7. CDC 통신 프로토콜 초안
 
@@ -161,10 +161,11 @@ PoC에서는 터미널로 바로 입력할 수 있는 줄 단위 ASCII 명령을
 | --- | --- | --- |
 | `VER?` | 펌웨어 버전, 빌드 날짜 | `OK 0.1.0 2026-11-13` |
 | `STAT?` | 스트리밍 여부, 현재 fps, 실제 비트레이트, 드롭 수 | `OK STREAM=1 FPS=30.0 KBPS=4010 DROP=0` |
-| `RES?` | 호스트가 선택한 포맷/해상도/fps | `OK H264 1280x720@30` |
-| `BITRATE <kbps>` | H.264 목표 비트레이트 변경(1000~8000) | `OK` |
-| `GOP <frames>` | IDR 주기 변경(기본 30) | `OK` |
-| `IDR` | 다음 프레임을 IDR로 강제 | `OK` |
+| `RES?` | 호스트가 선택한 포맷/해상도/fps | `OK MJPEG 1280x720@30` |
+| `JPEGQ <1-100>` | MJPEG 품질 값 변경(1-A) | `OK` |
+| `BITRATE <kbps>` | H.264 목표 비트레이트 변경(1000~8000, 1-B) | `OK` |
+| `GOP <frames>` | IDR 주기 변경(기본 30, 1-B) | `OK` |
+| `IDR` | 다음 프레임을 IDR로 강제(1-B) | `OK` |
 | `AE <0\|1>` | 자동 노출 끄기/켜기 | `OK` |
 | `EXP <us>` | 수동 노출 시간 | `OK` |
 | `GAIN <dB>` | 수동 게인 | `OK` |
@@ -188,11 +189,11 @@ ST가 공개한 예제 세 개를 합치는 방식으로 개발한다. 처음부
 
 **참고할 예제**
 
-- [x-cube-n6-ai-h264-usb-uvc](https://github.com/STMicroelectronics/x-cube-n6-ai-h264-usb-uvc): ST의 카메라 → VENC(H.264) → USB UVC 예제. 이번 프로젝트와 가장 가까운 출발점이다(AI 부분은 제외).
+- [x-cube-n6-ai-h264-usb-uvc](https://github.com/STMicroelectronics/x-cube-n6-ai-h264-usb-uvc): ST의 카메라 → VENC(H.264) → USB UVC 예제. 1-B의 출발점이다(AI 부분은 제외).
 - STM32CubeN6 VENC_USB: VENC H.264 스트림을 UVC로 보내는 예제. [Windows 카메라·VLC에서 안 보이는 문제와 ST 답변](https://community.st.com/stm32-mcus-embedded-software-32/venc-usb-uvc-stream-not-showing-in-windows-camera-or-vlc-stm32n6570-dk-157106)도 함께 본다.
 - [Introduction to Hardware Video Encoding with STM32 (ST 위키)](https://wiki.st.com/stm32mcu/wiki/Introduction_to_Hardware_Video_Encoding_with_STM32): VENC 구조, 메모리 요구량, 성능.
 - [x-cube-n6-camera-capture](https://github.com/STMicroelectronics/x-cube-n6-camera-capture): IMX335 → ISP → USB UVC 흐름. 카메라·ISP 코드를 가져온다.
-- [STM32CubeN6 Ux_Device_Video](https://github.com/STMicroelectronics/STM32CubeN6/tree/main/Projects/STM32N6570-DK/Applications/USBX/Ux_Device_Video): 카메라 없이 스트림을 보내는 USBX UVC 예제.
+- [STM32CubeN6 Ux_Device_Video](https://github.com/STMicroelectronics/STM32CubeN6/tree/main/Projects/STM32N6570-DK/Applications/USBX/Ux_Device_Video): 카메라 없이 MJPEG 스트림을 보내는 USBX UVC 예제. 1-A의 출발점이다.
 - STM32CubeN6 Ux_Device_CDC_ACM: USBX CDC 예제.
 - [How to implement the USB device composite class (ST 커뮤니티)](https://community.st.com/t5/stm32-mcus/how-to-implement-the-usb-device-composite-class-in-stm32-using/ta-p/645017): USBX composite 구성 방법.
 - [CDC+UVC composite 인식 실패 사례 (ST 커뮤니티)](https://stcommunity.st.com/t5/stm32-mcus-embedded-software/stm32n6-usbd-composite-cdc-uvc-failed-to-enumerate-under-windows/td-p/887985): VC/VS 인터페이스 번호가 고정되어 생기는 문제와 해결책.
@@ -201,31 +202,34 @@ ST가 공개한 예제 세 개를 합치는 방식으로 개발한다. 처음부
 
 다섯 단계를 순서대로 진행하고, 각 단계의 완료 기준을 통과해야 다음 단계로 넘어간다. 일정은 아직 정하지 않았다(10장).
 
-1. **M1 환경 구축과 예제 확인**
-    - 작업: x-cube-n6-ai-h264-usb-uvc(또는 VENC_USB), x-cube-n6-camera-capture, Ux_Device_CDC_ACM을 각각 빌드하고 굽는다.
-    - 완료 기준: 세 예제가 PC에서 동작하고, H.264 예제 스트림이 어느 호스트 앱에서 재생되는지 기록한다.
-2. **M2 composite 인식과 H.264 페이로드 방식 확정(가짜 영상)**
-    - 작업: CDC + UVC composite 디스크립터를 만들고, UVC는 미리 인코딩한 H.264 테스트 스트림을 반복 전송한다. 페이로드 방식 3가지를 비교한다.
-    - 완료 기준: 대상 호스트 앱에서 영상이 재생되는 방식을 하나 확정하고, 카메라와 COM 포트가 동시에 동작하며 CDC 에코 테스트가 통과한다.
-3. **M3 실제 카메라와 VENC 연결**
-    - 작업: IMX335 → DCMIPP/ISP(NV12) → VENC(H.264) → UVC 파이프라인을 연결한다.
-    - 완료 기준: 720p30 실영상이 나오고, 비트레이트와 IDR 크기를 실측해 5장 대역폭 표를 갱신한다.
-4. **M4 CDC 명령 구현**
+1. **M1 환경 구축과 예제 확인 (Windows PC)**
+    - 작업: Ux_Device_Video(MJPEG), x-cube-n6-camera-capture, Ux_Device_CDC_ACM을 각각 빌드하고 굽는다.
+    - 완료 기준: 세 예제가 Windows PC에서 동작하고, 태블릿 뷰어에서도 MJPEG 예제 영상이 나오는지 확인한다.
+2. **M2 composite 인식(MJPEG 가짜 영상)**
+    - 작업: CDC + UVC composite 디스크립터를 만들고, UVC는 고정 MJPEG 이미지를 보낸다.
+    - 완료 기준: Windows에서 카메라와 COM 포트가 동시에 동작하고 CDC 에코 테스트가 통과한다.
+3. **M3 실제 카메라 MJPEG 720p30 (1-A 완료)**
+    - 작업: IMX335 → DCMIPP/ISP → 하드웨어 JPEG → UVC 파이프라인을 연결한다.
+    - 완료 기준: Windows 카메라 앱과 태블릿 뷰어에서 720p30 실영상이 끊김 없이 나온다.
+4. **M4 H.264 전환과 페이로드 방식 확정 (1-B)**
+    - 작업: 인코더를 VENC H.264로 바꾸고, 페이로드 방식 3가지를 Windows와 태블릿에서 비교한다. x-cube-n6-ai-h264-usb-uvc와 VENC_USB 예제를 참고한다.
+    - 완료 기준: 태블릿 뷰어(필수)와 Windows(가능하면)에서 재생되는 방식을 하나 확정하고, 720p30 H.264 실영상이 나온다.
+5. **M5 CDC 명령 구현**
     - 작업: 7장 명령을 구현하고 카메라·인코더 제어와 연결한다.
-    - 완료 기준: 스트리밍 중 모든 명령이 50 ms 안에 응답하고, BITRATE·IDR 명령이 영상 끊김 없이 반영된다.
-5. **M5 안정화와 검증**
+    - 완료 기준: 스트리밍 중 모든 명령이 50 ms 안에 응답하고 영상 끊김이 없다.
+6. **M6 안정화와 검증**
     - 작업: 재연결·suspend 처리, 플래시 부팅, 5장 품질 목표 전체 측정.
     - 완료 기준: 24시간 soak 테스트와 재연결 100회를 통과한다.
 
 ## 10. 리스크와 미결 사항
 
-가장 큰 리스크는 호스트 앱이 H.264 UVC 스트림을 재생하지 못하는 것과, composite 디스크립터 오류로 UVC가 인식되지 않는 것이다. 둘 다 M2에서 카메라 없이 먼저 확인한다.
+가장 큰 리스크는 composite 디스크립터 오류로 UVC가 인식되지 않는 것(M2에서 MJPEG로 먼저 확인)과, 태블릿 앱이 H.264 UVC를 재생하지 못하는 것(M4)이다. MJPEG로 먼저 영상을 확보해 두면, H.264에서 막혀도 돌아갈 곳이 있다.
 
 **리스크**
 
 | 리스크 | 영향 | 대응 |
 | --- | --- | --- |
-| Windows 카메라 앱·VLC 등이 H.264 UVC 스트림을 재생하지 못함 | 장치는 인식되나 영상이 나오지 않음 | M2에서 페이로드 방식별로 대상 앱을 시험해 결정한다. ST는 Windows 호환을 위해 UVC 1.5와 MPEG-2 TS 포맷을 권고했다. 끝내 막히면 MJPEG 보조 포맷(F-04)을 추가한다 |
+| Windows 카메라 앱·VLC 등이 H.264 UVC 스트림을 재생하지 못함 | 장치는 인식되나 영상이 나오지 않음 | M4에서 페이로드 방식별로 대상 앱을 시험해 결정한다. ST는 Windows 호환을 위해 UVC 1.5와 MPEG-2 TS 포맷을 권고했다. 끝내 막히면 1-A의 MJPEG로 UVC 확인을 계속하고, H.264는 2단계 SD 카드 녹화에서 검증한다 |
 | 스트림 시작 시 SPS/PPS·IDR이 빠짐 | 처음 몇 초간 화면이 검거나 깨짐 | Commit과 alt setting 변경 시 즉시 IDR을 강제하고 SPS/PPS를 매 IDR 앞에 붙인다 |
 | isochronous 패킷 손실 | 다음 IDR까지 블록 노이즈가 이어짐 | IDR을 1초 주기로 넣고, 손실 카운터를 CDC `STAT?`으로 보고한다 |
 | 예제의 UVC 디스크립터에 VC/VS 인터페이스 번호(0/1)가 고정되어 있음 | CDC만 보이고 UVC는 인식되지 않음 | VC header의 baInterfaceNr, VS 모든 alternate setting의 번호를 동적으로 바꾼다. Wireshark로 디스크립터를 덤프해 확인한다 |
@@ -237,10 +241,10 @@ ST가 공개한 예제 세 개를 합치는 방식으로 개발한다. 처음부
 **미결 사항**
 
 - [ ] CDC 용도 확정: PC와의 명령 통신만 할지, 보드의 물리 UART와 브리지해 115200으로 외부 장치와 연결할지
-- [ ] 태블릿 기종(USB OTG 지원)과 UVC 뷰어 앱 이름 확정, 그 앱의 H.264 UVC 재생 여부 확인(M1)
+- [ ] 태블릿 기종(USB OTG 지원)과 UVC 뷰어 앱 이름 확정, 그 앱의 MJPEG(M1)·H.264(M4) UVC 재생 여부 확인
 - [ ] 지연 시간 목표치 확정(현재 150 ms 가정)
-- [ ] H.264 페이로드 방식(UVC 1.5 H.264 / UVC 1.1 frame-based / MPEG-2 TS) 결정(M2)
-- [ ] MJPEG 보조 포맷(F-04) 필요 여부, H.264 profile(Baseline/Main)과 기본 비트레이트 확정
+- [ ] H.264 페이로드 방식(UVC 1.5 H.264 / UVC 1.1 frame-based / MPEG-2 TS) 결정(M4)
+- [ ] H.264 전환 후 MJPEG를 보조 포맷으로 남길지, H.264 profile(Baseline/Main)과 기본 비트레이트 확정
 - [ ] 보유한 DK 보드 리비전과 카메라 모듈 확인
 - [ ] 마일스톤별 일정과 담당자
 - [ ] USB VID/PID(개발 중에는 ST 기본값, 제품화 시 자체 발급)
