@@ -21,7 +21,7 @@ Release/
 
 # IDE / tool state
 .metadata/
-.settings/language.settings.xml
+**/.settings/language.settings.xml
 *.launch.bak
 .vscode/
 *.tmp

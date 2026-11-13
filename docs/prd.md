@@ -200,8 +200,9 @@ ST가 공개한 예제 세 개를 합치는 방식으로 개발한다. 처음부
 
 | 항목 | 내용 |
 | --- | --- |
-| 보드 | STM32N6570-DK (리비전 확인 필요, 10장) |
+| 보드 | STM32N6570-DK, MB1939-N6570-C02 |
 | 카메라 | MB1854B IMX335 모듈(B-CAM-IMX) |
+| USB 데이터 포트 | USB1 = CN18 (UVC·CDC용 USB OTG HS) |
 | 케이블 | USB-C 2개: ST-LINK(CN6) 전원·디버그용, USB OTG HS 데이터용 |
 | IDE | STM32CubeIDE 또는 IAR EWARM, STM32CubeMX |
 | 펌웨어 패키지 | STM32CubeN6 (최신 버전), ThreadX + USBX |
@@ -267,9 +268,9 @@ ST가 공개한 예제 세 개를 합치는 방식으로 개발한다. 처음부
 - [ ] 태블릿 뷰어 앱의 디코딩·표시 지연 실측(100 ms 목표 달성 여부를 좌우, M4)
 - [ ] H.264 페이로드 방식(UVC 1.5 H.264 / UVC 1.1 frame-based / MPEG-2 TS) 결정(M4)
 - [ ] H.264 profile(Baseline/Main)과 기본 비트레이트 확정
-- [ ] 보유한 DK 보드 리비전과 카메라 모듈 확인
+- [x] 보유한 DK 보드 리비전과 카메라 모듈 확인: MB1939-N6570-C02, MB1854B (M1)
 - [ ] 마일스톤별 일정과 담당자
-- [ ] USB VID/PID(개발 중에는 ST 기본값, 제품화 시 자체 발급)
+- [ ] USB VID/PID(개발 중에는 ST VID 0x0483 + 임시 PID 0x5760(M2부터, Windows 드라이버 캐시 충돌 방지), 제품화 시 자체 발급)
 
 **다음 단계를 위해 미리 정할 것**
 

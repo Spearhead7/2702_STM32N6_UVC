@@ -44,5 +44,12 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 서명: `STM32_SigningTool_CLI.exe -bin <app>.bin -nk -of 0x80000000 -t fsbl -o <app>-trusted.bin -hv 2.3 -align` (CubeProgrammer 2.21 이상은 `-align` 필요). 굽기는 사용자가 한다.
 
 ## 현재 상태
-- PRD 확정, 펌웨어 코드는 아직 없음.
-- **M1 진행 중**: 예제 준비·빌드·서명 완료, 사용자가 `docs/m1-guide.md`에 따라 보드에서 확인할 차례. 결과를 받으면 `docs/progress.md`와 PRD 10장(보드 리비전, 태블릿 앱)에 반영한다.
+- 보드 MB1939-N6570-C02, 카메라 MB1854B, USB1 = CN18.
+- M1: 예제 3개 모두 Windows PC에서 동작 확인. 태블릿 UVC 뷰어 확인과 기종·앱 이름 기록(PRD 10장)은 사용자가 나중에 한다.
+- **M2 보드 확인 대기**: `fw/`(CubeIDE 프로젝트 `STM32N6_UVC`)에 CDC 에코 + UVC 고정 MJPEG composite 작성, 빌드 0 errors. 확인 절차는 `docs/m2-guide.md`, 변경 내역은 `docs/progress.md`.
+
+## 펌웨어 구조 (fw/)
+- CubeN6 V1.4.1 `USBPD_SNK_Ux_Device_HID_CDC_ACM`에서 출발(ThreadX + USBX + USBPD). UVC는 `Ux_Device_Video`에서 가져옴.
+- `.ioc` 없음. CubeMX로 다시 생성하지 말고 코드를 직접 고친다.
+- 개발 모드 전용 링커 배치(AXISRAM2, ROM 383K / RAM 128K, 끝 32K는 MPU 비캐시). 플래시 부팅 구조는 M6에서.
+- 디버그 로그: printf → USART1(ST-LINK 가상 COM, 115200).
