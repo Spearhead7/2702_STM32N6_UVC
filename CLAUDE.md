@@ -12,7 +12,7 @@
 - 빌드 산출물(Debug/, Release/ 등)은 커밋하지 않는다(.gitignore 참고).
 
 ## 확정된 결정 (요약, 자세한 내용은 docs/prd.md)
-- 영상: 1280×720 30fps. **1-A MJPEG로 먼저 영상 확인 → 1-B H.264로 전환·확정**. H.264가 태블릿에서 확인되면 MJPEG 디스크립터·코드·CLI 명령은 영구 삭제.
+- 영상: 1280×720 30fps. **1-A MJPEG로 먼저 영상 확인 → 1-B H.264로 전환·확정**. H.264가 태블릿에서 확인되면 MJPEG 디스크립터·코드·CLI 명령은 영구 삭제. 삭제 전 MJPEG 동작 코드는 git 태그 `m3-mjpeg-ref`(커밋 b7444ea)로 보존되어 있다(참고용).
 - 인코딩: N6 하드웨어 인코더 VENC. H.264는 I/P만(B-프레임 없음), CBR 4 Mbps, IDR 1초 주기, 스트림 시작 시 SPS/PPS + IDR 먼저.
 - USB: USB OTG HS 하나에 CDC-ACM(IF0-1) + UVC(IF2-3) composite, IAD 사용. 예제 UVC 디스크립터의 VC/VS 인터페이스 번호 하드코딩(0/1)을 composite 번호로 고쳐야 한다.
 - CDC: Tera Term용 대화형 CLI. 프롬프트 `n6uvc> `, 에코, `help`, 마지막 줄은 항상 `OK` 또는 `ERROR: <이유>`. 명령 목록은 PRD 7장.
@@ -47,7 +47,7 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 - 보드 MB1939-N6570-C02, 카메라 MB1854B, USB1 = CN18.
 - M1: 예제 3개 모두 Windows PC에서 동작 확인. 태블릿 UVC 뷰어 확인과 기종·앱 이름 기록(PRD 10장)은 사용자가 나중에 한다.
 - **M2 완료**(2026-11-13): `fw/`(CubeIDE 프로젝트 `STM32N6_UVC`)의 CDC 에코 + UVC 고정 MJPEG composite가 Windows에서 동시 동작 확인.
-- **M3 코드 완료, 보드 확인 대기**(2026-11-13): IMX335 → DCMIPP/ISP → VENC JPEG → 프레임 큐 → UVC 1280×720 30fps. 확인 절차 `docs/m3-guide.md`, 변경 내역 `docs/progress.md`.
+- **M3 완료**(2026-11-13): IMX335 → DCMIPP/ISP → VENC JPEG → 프레임 큐 → UVC 1280×720 30fps가 Windows 카메라 앱·VLC에서 동작(USB DMA, HS 1024 B×3). 영상 중 CDC 에코·앱 재시작 OK. 장치 내부 지연 평균 약 57 ms(목표 50 ms)는 1-B H.264(M4)에서 다시 확인하기로 함. 태블릿 확인은 나중에. 참고 코드 태그 `m3-mjpeg-ref`. 5초마다 USART1에 `VIDEO:`/`UVC:`/`LAT` 통계.
 - HardFault 시 원인 레지스터·PC·스레드 이름이 USART1로 출력된다. PC는 `arm-none-eabi-addr2line -f -e fw/Debug/STM32N6_UVC.elf <PC>`로 찾는다. Debug(-O0)는 스택을 많이 쓰니 스레드 스택은 넉넉히 잡는다.
 
 ## 펌웨어 구조 (fw/)

@@ -44,6 +44,10 @@ const video_cfg_t *video_cfg_get(void)
 #define VIDEO_THREAD_STACK_SIZE   (8U * 1024U)   /* Debug(-O0)와 ISP 알고리즘 여유 */
 #define VIDEO_THREAD_PRIO         22U            /* USBX 클래스 스레드(UVC 전송, 20)보다 낮게: 전송이 ISP 계산에 밀리지 않게 */
 #define VIDEO_STATS_PERIOD_MS     5000U
+/* 통계 출력 스레드. printf(USART1 115200, 1글자씩 블로킹)는 5초마다 약 30 ms 걸리므로
+   영상 스레드에서 하면 그동안 프레임 처리가 밀린다(LAT enc 최대 36 ms). 가장 낮은 우선순위로 뺀다. */
+#define VSTATS_THREAD_STACK_SIZE  (3U * 1024U)
+#define VSTATS_THREAD_PRIO        30U
 #define VIDEO_FRAME_TIMEOUT_MS    500U
 
 #define FLAG_FRAME                0x01U
@@ -56,6 +60,8 @@ static uint8_t cap_buf[CAP_BUF_NUM][CAP_BUF_SIZE] IN_PSRAM;
 
 static TX_THREAD            video_thread;
 static ULONG                video_thread_stack[VIDEO_THREAD_STACK_SIZE / sizeof(ULONG)];
+static TX_THREAD            vstats_thread;
+static ULONG                vstats_thread_stack[VSTATS_THREAD_STACK_SIZE / sizeof(ULONG)];
 static TX_EVENT_FLAGS_GROUP video_flags;
 
 /* ISR ↔ 스레드 공유 상태 */
@@ -71,6 +77,7 @@ static volatile uint32_t cap_ready_end   = 0U;
 static video_stats_t stats;
 
 static void video_thread_entry(ULONG arg);
+static void vstats_thread_entry(ULONG arg);
 
 /* ---------------------------------------------------------------------------
  * 공개 함수
@@ -89,9 +96,18 @@ UINT video_app_init(void)
     return ret;
   }
 
-  return tx_thread_create(&video_thread, "video", video_thread_entry, 0U,
-                          video_thread_stack, sizeof(video_thread_stack),
-                          VIDEO_THREAD_PRIO, VIDEO_THREAD_PRIO,
+  ret = tx_thread_create(&video_thread, "video", video_thread_entry, 0U,
+                         video_thread_stack, sizeof(video_thread_stack),
+                         VIDEO_THREAD_PRIO, VIDEO_THREAD_PRIO,
+                         TX_NO_TIME_SLICE, TX_AUTO_START);
+  if (ret != TX_SUCCESS)
+  {
+    return ret;
+  }
+
+  return tx_thread_create(&vstats_thread, "vstats", vstats_thread_entry, 0U,
+                          vstats_thread_stack, sizeof(vstats_thread_stack),
+                          VSTATS_THREAD_PRIO, VSTATS_THREAD_PRIO,
                           TX_NO_TIME_SLICE, TX_AUTO_START);
 }
 
@@ -327,7 +343,6 @@ static void video_fail(int32_t step, const char *what)
 static void video_thread_entry(ULONG arg)
 {
   const video_cfg_t *cfg = video_cfg_get();
-  uint32_t last_stats_tick;
   int32_t  ret;
 
   (void)arg;
@@ -368,7 +383,6 @@ static void video_thread_entry(ULONG arg)
 
   stats.init_status = 0;
   printf("VIDEO: camera started\r\n");
-  last_stats_tick = HAL_GetTick();
 
   for (;;)
   {
@@ -379,9 +393,6 @@ static void video_thread_entry(ULONG arg)
     uint32_t t_start;
     uint32_t t_end;
     vfq_frame_t *f;
-
-    /* ISP 자동 노출·화이트밸런스(프레임마다 한 번) */
-    (void)BSP_CAMERA_BackgroundProcess();
 
     if (tx_event_flags_get(&video_flags, FLAG_FRAME, TX_OR_CLEAR, &flags,
                            VIDEO_FRAME_TIMEOUT_MS * TX_TIMER_TICKS_PER_SECOND / 1000U) == TX_SUCCESS)
@@ -454,12 +465,31 @@ static void video_thread_entry(ULONG arg)
       }
     }
 
-    if ((HAL_GetTick() - last_stats_tick) >= VIDEO_STATS_PERIOD_MS)
+    /* ISP 자동 노출·화이트밸런스(프레임마다 한 번). 프레임을 먼저 인코딩한 뒤에 돌려서
+       AE/AWB 계산이 오래 걸리는 프레임에서도 인코딩 시작이 늦어지지 않게 한다. */
+    (void)BSP_CAMERA_BackgroundProcess();
+  }
+}
+
+/* 5초마다 VIDEO:/UVC:/LAT 통계 출력(가장 낮은 우선순위) */
+static void vstats_thread_entry(ULONG arg)
+{
+  uint32_t last = HAL_GetTick();
+  (void)arg;
+
+  for (;;)
+  {
+    uint32_t now;
+
+    tx_thread_sleep(VIDEO_STATS_PERIOD_MS * TX_TIMER_TICKS_PER_SECOND / 1000U);
+    if (stats.init_status != 0)
     {
-      uint32_t now = HAL_GetTick();
-      video_print_stats(now - last_stats_tick);
-      video_stats_hook(now - last_stats_tick);
-      last_stats_tick = now;
+      last = HAL_GetTick();
+      continue;   /* 카메라 시작 전(또는 실패) */
     }
+    now = HAL_GetTick();
+    video_print_stats(now - last);
+    video_stats_hook(now - last);
+    last = now;
   }
 }
