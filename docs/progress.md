@@ -266,3 +266,78 @@
   - 5초 통계 출력(printf, USART1 1글자씩 블로킹 약 30 ms)을 영상 스레드에서 가장 낮은 우선순위 스레드 `vstats`(30)로 옮김. LAT enc 최대 36 ms / total 최대 81 ms의 원인으로 본다.
   - ISP AE/AWB(`BSP_CAMERA_BackgroundProcess`)를 프레임 인코딩 뒤로 옮김.
 - 보드 확인(사용자): LAT enc 최대 36 → **12.0 ms**, total 최대 81 → **58~60 ms**(평균 57.3~57.8 ms 그대로). 통계는 5초마다 정상 출력. 튐의 원인은 영상 스레드 안의 printf였다.
+
+## M4 H.264 전환 (1-B)
+
+### 2026-11-13 M4-1 참고 코드 확보·분석 (Claude)
+
+**받은 것**(저장소 밖, 참고용)
+- `ref\x-cube-n6-ai-h264-usb-uvc\` v2.2.1(GitHub 얕은 클론). FreeRTOS + ST `uvcl`(USBX), 안에 CubeN6 사본(HAL V1.3.0 등)이 들어 있다.
+- CubeN6 V1.4.1 `VENC_USB`는 CubeMX 저장소 `%USERPROFILE%\STM32Cube\Repository\STM32Cube_FW_N6_V1.4.1\Projects\STM32N6570-DK\Applications\VENC\VENC_USB`에 이미 있다. **ThreadX + USBX + ux_device_descriptors 구조가 우리 fw와 같다** → M4의 주 참고.
+- VideoEncoder: 두 예제 모두 우리 fw의 사본과 inc·common 내용이 같다(줄끝만 다름). 우리에게 없는 것은 `source/h264/`(32개 파일)와 `source/common/encInputLineBuffer.c`(DCMIPP–VENC 하드웨어 핸드셰이크용)뿐이다. CubeN6 V1.4.1 저장소에서 가져온다.
+
+**인코더 설정 비교**
+
+| 항목 | VENC_USB (CubeN6) | ai-h264-usb-uvc | M4 계획 |
+|---|---|---|---|
+| 입력 | YUYV(DCMIPP YUV422_1), 슬라이스 모드는 NV12(YUV420_2) | ARGB8888(RGB888 32bpp) | **YUYV 그대로**(지금 DCMIPP 출력) |
+| level / 스트림 | 4.1, BYTE_STREAM(Annex-B) | 5.1, BYTE_STREAM | 3.1, BYTE_STREAM |
+| 율 제어 | pictureRc·mbRc, HRD 켬, qpHdr 26, qp 0~51 | VBR(HRD 끔), qpHdr 25, qp 10~51, 720p 약 11 Mbps | CBR 4 Mbps(HRD로 순간 비트 제한) |
+| GOP | 30 | fps−1(=29, `pic_cnt % (gop+1)`) | 30 |
+| SPS/PPS | `idrHeader = 1`(IDR마다) | `idrHeader = 1` + 첫 프레임 `H264EncStrmStart` | 같음. 스트림 시작 시 IDR 강제 |
+| 출력 정렬 | — | StrmStart 뒤 출력 주소 8바이트 정렬용 필러 NAL(0x2c) 삽입 | 같은 처리 필요 |
+| VENC 메모리 | 풀 8 MB(1080p 기준) | 선형 할당 4 MB(PSRAM) | 4 MB부터(지금 EWL 풀 256 KB) |
+| 하드웨어 핸드셰이크 | 있음(`VENC_HW_MODE_ENABLE`, 720p_Slice: NV12 입력 버퍼를 내부 RAM에 16줄×2) | 없음 | M4-6 지연 대책 후보 |
+
+**UVC 페이로드 방식**
+
+| 예제 | 방식 | bcdUVC | 비고 |
+|---|---|---|---|
+| VENC_USB | frame-based H.264(기본, `USBD_UVC_USE_FRAME_BASE_H264`) 또는 UVC 1.5 H.264(`USBD_UVC_USE_H264`) 스위치 | 0x0110 | 두 방식 코드가 모두 있다 → ①·② 시험에 그대로 참고 |
+| ai-h264-usb-uvc | frame-based H.264(GUID 'H264'), bVariableSize 1 | 0x0150 | README의 Windows 재생 방법은 **ffplay만** 안내(카메라 앱 언급 없음) |
+
+- 두 예제 모두 기본은 frame-based → 계획의 ① 우선 순서가 맞다. Windows 카메라 앱 재생은 보장되지 않으므로 M4-3에서 ffplay(우리에겐 ShareX ffmpeg에 ffplay 없음 → ffmpeg로 캡처 저장 또는 VLC)와 카메라 앱을 함께 본다.
+- MJPEG도 ai 예제는 frame-based(GUID 'MJPG')로 낼 수 있다. 우리는 지금처럼 MJPEG 전용 포맷(VS_FORMAT_MJPEG)을 유지한다.
+
+**지연 관점**
+- 지금 장치 내부 57 ms 중 cap 29 ms는 프레임 모드에서는 줄일 수 없다. VENC_USB의 하드웨어 핸드셰이크(슬라이스) 모드는 DCMIPP가 16줄을 쓸 때마다 VENC가 바로 인코딩하므로 cap과 enc가 겹친다 → 50 ms 목표의 가장 확실한 수단. 다만 입력이 NV12여야 하고(DCMIPP 출력 변경), MJPEG(YUYV)와 동시 유지가 어렵다 → M4-6에서 프레임 모드 결과를 보고 결정.
+
+### 2026-11-13 M4-2 H.264 인코더 추가 (Claude)
+
+**가져온 소스**: CubeN6 V1.4.1 저장소의 VideoEncoder 9.22.3.7 → `fw/Middlewares/Third_Party/VideoEncoder/source/h264/`(32개), `source/common/encInputLineBuffer.c`. `.cproject` 두 구성에 `source/h264` include 경로 추가.
+
+**코드**
+- `fw/Video/Src/h264_enc.c/.h`(새로 만듦): Baseline(CAVLC), Level 3.1, YUYV 입력, 참조 1장, I/P만. CBR(pictureRc·mbRc·HRD, cpb = 1초분), qpHdr 26, qp 10~51, GOP 30. `H264EncStrmStart`의 SPS/PPS를 보관해 IDR마다 앞에 붙이고, 뒤에 8바이트 정렬용 필러 NAL(type 12)을 넣는다. `h264_enc_request_idr()`로 즉시 IDR. 인코딩 실패 뒤에는 IDR부터 다시.
+- `fw/Video/Src/venc_ewl.c`(새로 만듦): EWL 작업 메모리 6 MB(PSRAM). JPEG·H.264가 번갈아 쓴다. `jpeg_enc.c`의 256 KB 풀은 지웠다.
+- `video_cfg.h`: `VIDEO_DEFAULT_FORMAT`(지금 시험용 1 = H.264), `VIDEO_DEFAULT_BITRATE` 4 Mbps, `VIDEO_DEFAULT_GOP` 30.
+- `video_app.c`: `video_set_format()` / `video_request_keyframe()` 추가. 영상 스레드가 프레임마다 요청 형식을 보고 인코더를 다시 만든다(VENC 인스턴스는 하나). 프레임 큐에 형식·키프레임 여부를 넣는다. 통계 줄에 형식, 평균·IDR 크기 추가.
+- `ux_device_video.c`: 호스트가 고른 형식(아직 MJPEG 고정)과 다른 프레임, 키프레임 대기 중의 P 프레임은 보내지 않고 `skipfrm`으로 센다. 스트림 시작 시 키프레임 대기.
+
+**M4-2 보드 확인에서 볼 것**: 부팅 로그 `VIDEO: encoder H264`, 5초 통계 `VIDEO: H264 … enc 30 fps, avg ≈17 KB, idr N KB, enc N ms, err 0`. UVC는 아직 MJPEG만 알려 주므로 카메라 앱에는 영상이 나오지 않는 것이 정상(`skipfrm` 증가).
+- Debug 링크 오류(ROM 383K를 800 B 초과): H.264 라이브러리가 -O0에서 커서. `.cproject` Debug에 `Middlewares/Third_Party/VideoEncoder` 폴더만 -Os로 빌드하도록 설정(Release는 원래 전체 -Os).
+
+**M4-2 보드 확인 결과(2026-11-13, 사용자)**: 통과. `VIDEO: encoder H264`, cap/enc 30.0 fps, avg 16 KB(≈3.9 Mbps, 목표 4 Mbps CBR와 일치), IDR 약 117~119 KB(30프레임마다), enc 16~19 ms, err 0, pipeerr 0, noslot 0. UVC는 MJPEG만 알려 주므로 `skipfrm`이 30/s로 늘고 PC·갤럭시 노트20 모두 까만 화면(예상대로). IDR이 평균의 약 7배라 M4-6에서 IDR 크기·지연을 함께 본다.
+
+### 2026-11-13 M4-3 UVC H.264 frame-based 추가 (Claude)
+
+- `ux_device_descriptors.h/.c`: VS 인터페이스에 형식 2개. 형식 1 = MJPEG(기존), 형식 2 = H.264 frame-based(UVC 1.1, VS_FORMAT_FRAME_BASED 0x10, GUID `H264`, bVariableSize 1, 프레임 1280×720 30fps, 비트레이트 1~16 Mbps 표기). 형식마다 Color Matching 디스크립터 추가. VS 헤더 bmaControls를 형식 수만큼, wTotalLength 126.
+- `ux_device_video.c`: Probe/Commit SET_CUR에서 호스트가 보낸 bFormatIndex를 받는다(예제는 무시했음). Commit 형식으로 `uvc_format`을 정하고, 스트림 시작(대체 설정 1) 때 `video_set_format()` + `video_request_keyframe()`. UVC 통계에 형식 표시(`UVC: streaming H264 ...`).
+- 인코더 기본 형식은 H.264(스트림을 열면 호스트가 고른 형식으로 바뀜). 부팅 배너를 M4로.
+- 빌드 확인은 사용자가 한다.
+- 보드 시험 1차: PC에서 'USB 장치 인식 실패'. 원인: 구성 디스크립터가 273 B로 늘었는데 USBX 제어 전송 버퍼 기본값(UX_SLAVE_REQUEST_CONTROL_MAX_LENGTH 256)을 넘어 GET_DESCRIPTOR가 STALL. `ux_user.h`에서 512로 늘림.
+- 보드 시험 2차(사용자, Windows): 장치 인식 OK. ffmpeg dshow 목록에 `mjpeg`, `h264` 1280x720 30fps 둘 다 보임. Windows 카메라 앱은 MJPEG를 고름(정상 표시). ffmpeg `-vcodec h264`로 열면 `VIDEO: encoder H264` → `UVC: streaming H264, sent 29.9 fps`, 닫고 MJPEG로 열면 다시 `encoder MJPEG` → 30 fps. 형식 전환 OK, err 0.
+- 지연(LAT avg/max): MJPEG total 57.9/58.7 ms(cap 29.1, enc 11.3, usb 17.4). H.264 total 51.5/75.4 ms(cap 29.1, enc 18.6, usb 3.6/29.5). H.264는 USB 구간이 크게 줄었지만 목표 50 ms를 약간 넘는다. 최대값은 IDR(약 122 KB) 프레임의 USB 전송.
+  - 실제 USB 전송률이 약 4.3 MB/s(75 KB에 17 ms, 122 KB에 29 ms)로 HS 3×1024 B 이론값(약 24 MB/s)보다 훨씬 낮다(isoinc 계속 증가). M4-6에서 USB 최적화(zero-copy, 페이로드 채우기)와 DCMIPP–VENC 핸드셰이크(cap 29 ms 겹치기)를 검토.
+- H.264 녹화 확인(Claude가 이 PC에서 ffmpeg로 직접): 처음 0바이트였던 이유는 dshow가 패킷에 키프레임 표시를 하지 않아 ffmpeg `-c copy`가 첫 키프레임을 기다리며 모두 버렸기 때문(장치 문제 아님, 152 패킷 2.58 MB는 받았음). `-copyinkf`를 붙이면 5초 150프레임, 4.0 Mbps, Constrained Baseline 1280x720 30fps로 저장되고 디코딩 오류 0, 화면 정상. **M4-3 Windows 확인 통과.**
+  - 스트림을 보니 IDR 앞에 SPS/PPS가 두 번 들어간다(h264_enc.c가 붙이는 것 + 인코더 `idrHeader=1`). 동작에는 문제없음. 정리 대상(M4-6/M4-7).
+  - 녹화 명령: `ffmpeg -f dshow -vcodec h264 -video_size 1280x720 -framerate 30 -i video="STM32N6 UVC CDC" -c copy -copyinkf -t 10 test.h264`
+
+### 2026-11-13 M4-5 갤럭시 노트20 시험 (사용자)
+
+- 연결하자마자 권한 창이나 반응이 없어서 처음에는 인식 실패로 보였다. 실제로는 카메라 앱을 열 때 장치를 연다(USB Device Info 등으로 확인). OTG 젠더와 C to C 모두 같음.
+- 앱이 MJPEG를 골라 `UVC: streaming MJPEG, sent 30.0 fps`, LAT total 57.4 ms. 화면 정상, 화질 좋고 깨짐 없음. **MJPEG 노트20 통과.** isoinc가 PC보다 많지만(약 380/s) 화면 영향은 보이지 않음.
+- 남은 것: 앱에서 H.264를 고를 수 있는지, 앱 이름·버전과 Android 버전 기록(PRD 10장).
+- 앱: ShenYao China "USB Camera"(Play 스토어). 버전·무료/Pro 여부, Android 버전은 확인 중.
+- 앱 해상도 목록에 `MJPEG 1280x720`, `H.264 1280x720` 둘 다 보이고 선택 가능. **H.264를 고르면 영상이 잘 나옴(사용자 확인). M4-5 노트20 H.264 통과** → frame-based(①)로 충분, UVC 1.5(M4-4)·TS(M4-5b)는 필요 없음.
+  - 노트20 H.264 로그: sent 29.9~30.1 fps, err 0, LAT total 평균 50.7~51.2 ms / 최대 64~68 ms(cap 29.1, enc 18, usb 3.6, IDR일 때 usb 최대 약 19~22 ms). isoinc 약 50/s로 MJPEG(약 380/s)보다 적음.
+- 기록: 갤럭시 노트20, One UI 5.1(Android 13), ShenYao "USB Camera" 12.3.2. PRD 10장 미결 사항에 반영.

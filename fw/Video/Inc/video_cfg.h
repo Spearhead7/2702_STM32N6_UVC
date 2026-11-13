@@ -37,12 +37,22 @@ extern "C" {
    한 장이 약 250 KB를 넘지 않는 값으로 둔다. */
 #define VIDEO_DEFAULT_JPEG_Q    6U
 
+/* 영상 형식(VFQ_FMT_*: 0 MJPEG, 1 H.264). UVC가 스트림을 열 때 호스트가 고른 형식으로 바뀐다.
+   스트림이 열리기 전(그리고 2단계 녹화)의 기본은 H.264. */
+#define VIDEO_DEFAULT_FORMAT    1U
+/* H.264: CBR 비트레이트(bps), IDR 주기(프레임) */
+#define VIDEO_DEFAULT_BITRATE   4000000U
+#define VIDEO_DEFAULT_GOP       30U
+
 typedef struct
 {
   uint32_t width;     /* 출력 폭(16의 배수)  */
   uint32_t height;    /* 출력 높이(8의 배수) */
   uint32_t fps;       /* 카메라 프레임레이트 */
   uint32_t jpeg_q;    /* JPEG 양자화 수준 0~9 */
+  uint32_t format;    /* 시작 형식 VFQ_FMT_* */
+  uint32_t bitrate;   /* H.264 목표 비트레이트(bps) */
+  uint32_t gop;       /* H.264 IDR 주기(프레임) */
 } video_cfg_t;
 
 /* 현재 설정(읽기 전용). 카메라 시작 전에 정해지고, 지금은 실행 중 변경을 지원하지 않는다. */

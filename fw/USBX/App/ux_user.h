@@ -200,7 +200,8 @@
 /* Defined, this value represents the maximum number of bytes received on a control endpoint in
    the device stack. The default is 256 bytes but can be reduced in memory constrained environments.  */
 
-/* #define UX_SLAVE_REQUEST_CONTROL_MAX_LENGTH              256 */
+/* 구성 디스크립터 전체(CDC + UVC MJPEG/H.264 = 273 B)가 한 번에 나가야 한다. 기본 256은 부족(M4-3). */
+#define UX_SLAVE_REQUEST_CONTROL_MAX_LENGTH              512
 
 /* Defined, this value represents the endpoint buffer owner.
    0 - The default, endpoint buffer is managed by core stack. Each endpoint takes UX_SLAVE_REQUEST_DATA_MAX_LENGTH bytes.

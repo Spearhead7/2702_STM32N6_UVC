@@ -804,6 +804,23 @@ static void USBD_FrameWork_CDCDesc(USBD_DevClassHandleTypeDef *pdev,
 
 #if USBD_VIDEO_CLASS_ACTIVATED == 1
 /**
+  * @brief  Color Matching Descriptor(BT.709, BT.709, SMPTE 170M)를 붙인다.
+  */
+static void USBD_FrameWork_VIDEO_ColorDesc(uint32_t pConf, uint32_t *Sze)
+{
+  USBD_VIDEOColorMatchingDescTypeDef *pColorDesc;
+
+  pColorDesc = ((USBD_VIDEOColorMatchingDescTypeDef *)(pConf + *Sze));
+  pColorDesc->bLength = (uint8_t)sizeof(USBD_VIDEOColorMatchingDescTypeDef);
+  pColorDesc->bDescriptorType = UX_DEVICE_CLASS_VIDEO_CS_INTERFACE;
+  pColorDesc->bDescriptorSubType = 0x0DU;      /* VS_COLORFORMAT */
+  pColorDesc->bColorPrimaries = 0x01U;
+  pColorDesc->bTransferCharacteristics = 0x01U;
+  pColorDesc->bMatrixCoefficients = 0x04U;
+  *Sze += (uint32_t)sizeof(USBD_VIDEOColorMatchingDescTypeDef);
+}
+
+/**
   * @brief  USBD_FrameWork_VIDEO_Desc
   *         Configure and Append the VIDEO Descriptor
   *         (STM32CubeN6 V1.4.1 Ux_Device_Video 예제를 composite용으로 고침)
@@ -826,6 +843,12 @@ static void USBD_FrameWork_VIDEO_Desc(USBD_DevClassHandleTypeDef *pdev,
   USBD_VIDEOVSHeaderDescTypeDef *pVideoSHeaderDesc;
   USBD_VIDEOPayloadFormatDescTypeDef *pVideoPayForDesc;
   USBD_VIDEOFrameDescTypeDef *pVideoFrameDesc;
+  USBD_VIDEOFrameBasedFormatDescTypeDef *pFbFormatDesc;
+  USBD_VIDEOFrameBasedFrameDescTypeDef *pFbFrameDesc;
+  /* H.264 GUID 34363248-0000-0010-8000-00AA00389B71 */
+  static const uint8_t h264_guid[16] = {'H', '2', '6', '4', 0x00U, 0x00U, 0x10U, 0x00U,
+                                        0x80U, 0x00U, 0x00U, 0xAAU, 0x00U, 0x38U, 0x9BU, 0x71U};
+  uint32_t i;
 
 #if USBD_COMPOSITE_USE_IAD == 1
   pIadDesc = ((USBD_IadDescTypedef *)(pConf + *Sze));
@@ -895,8 +918,8 @@ static void USBD_FrameWork_VIDEO_Desc(USBD_DevClassHandleTypeDef *pdev,
   pVideoSHeaderDesc->bLength = (uint8_t)sizeof(USBD_VIDEOVSHeaderDescTypeDef);
   pVideoSHeaderDesc->bDescriptorType = UX_DEVICE_CLASS_VIDEO_CS_INTERFACE;
   pVideoSHeaderDesc->bDescriptorSubtype = UX_DEVICE_CLASS_VIDEO_VC_HEADER;
-  pVideoSHeaderDesc->bNumFormats = 0x01U;
-  pVideoSHeaderDesc->wTotalLength = VC_HEADER_SIZE;  /* VS header 14 + format 11 + frame 30 */
+  pVideoSHeaderDesc->bNumFormats = UVC_NUM_FORMATS;
+  pVideoSHeaderDesc->wTotalLength = VC_HEADER_SIZE;
   pVideoSHeaderDesc->bEndpointAddress = USBD_VIDEO_EPIN_ADDR;
   pVideoSHeaderDesc->bmInfo = 0x00U;
   pVideoSHeaderDesc->bTerminalLink = 0x02U;
@@ -904,7 +927,10 @@ static void USBD_FrameWork_VIDEO_Desc(USBD_DevClassHandleTypeDef *pdev,
   pVideoSHeaderDesc->bTriggerSupport = 0x00U;
   pVideoSHeaderDesc->bTriggerUsage = 0x00U;
   pVideoSHeaderDesc->bControlSize = 0x01U;
-  pVideoSHeaderDesc->bmaControls = 0x00U;
+  for (i = 0U; i < UVC_NUM_FORMATS; i++)
+  {
+    pVideoSHeaderDesc->bmaControls[i] = 0x00U;
+  }
   *Sze += (uint32_t)sizeof(USBD_VIDEOVSHeaderDescTypeDef);
 
   /* MJPEG Payload Format Descriptor */
@@ -912,7 +938,7 @@ static void USBD_FrameWork_VIDEO_Desc(USBD_DevClassHandleTypeDef *pdev,
   pVideoPayForDesc->bLength = (uint8_t)sizeof(USBD_VIDEOPayloadFormatDescTypeDef);
   pVideoPayForDesc->bDescriptorType = UX_DEVICE_CLASS_VIDEO_CS_INTERFACE;
   pVideoPayForDesc->bDescriptorSubType = UX_DEVICE_CLASS_VIDEO_VS_FORMAT_MJPEG;
-  pVideoPayForDesc->bFormatIndex = 0x01U;
+  pVideoPayForDesc->bFormatIndex = UVC_FMT_IDX_MJPEG;
   pVideoPayForDesc->bNumFrameDescriptors = 0x01U;
   pVideoPayForDesc->bmFlags = 0x01U;
   pVideoPayForDesc->bDefaultFrameIndex = 0x01U;
@@ -950,6 +976,55 @@ static void USBD_FrameWork_VIDEO_Desc(USBD_DevClassHandleTypeDef *pdev,
   pVideoFrameDesc->dwMaxVideoFrameBufferSize = UVC_MAX_FRAME_SIZE;
   pVideoFrameDesc->bFrameIntervalType = 0x01U;
   *Sze += (uint32_t)sizeof(USBD_VIDEOFrameDescTypeDef);
+
+  USBD_FrameWork_VIDEO_ColorDesc(pConf, Sze);
+
+  /* H.264 Frame-based Payload Format Descriptor (M4-3) */
+  pFbFormatDesc = ((USBD_VIDEOFrameBasedFormatDescTypeDef *)(pConf + *Sze));
+  pFbFormatDesc->bLength = (uint8_t)sizeof(USBD_VIDEOFrameBasedFormatDescTypeDef);
+  pFbFormatDesc->bDescriptorType = UX_DEVICE_CLASS_VIDEO_CS_INTERFACE;
+  pFbFormatDesc->bDescriptorSubType = 0x10U;   /* VS_FORMAT_FRAME_BASED */
+  pFbFormatDesc->bFormatIndex = UVC_FMT_IDX_H264;
+  pFbFormatDesc->bNumFrameDescriptors = 0x01U;
+  for (i = 0U; i < 16U; i++)
+  {
+    pFbFormatDesc->guidFormat[i] = h264_guid[i];
+  }
+  pFbFormatDesc->bBitsPerPixel = 0x00U;
+  pFbFormatDesc->bDefaultFrameIndex = 0x01U;
+  pFbFormatDesc->bAspectRatioX = 0x00U;
+  pFbFormatDesc->bAspectRatioY = 0x00U;
+  pFbFormatDesc->bmInterlaceFlags = 0x00U;
+  pFbFormatDesc->bCopyProtect = 0x00U;
+  pFbFormatDesc->bVariableSize = 0x01U;        /* 프레임마다 크기가 다르다 */
+  *Sze += (uint32_t)sizeof(USBD_VIDEOFrameBasedFormatDescTypeDef);
+
+  /* H.264 Frame-based Frame Descriptor */
+  pFbFrameDesc = ((USBD_VIDEOFrameBasedFrameDescTypeDef *)(pConf + *Sze));
+  pFbFrameDesc->bLength = (uint8_t)sizeof(USBD_VIDEOFrameBasedFrameDescTypeDef);
+  pFbFrameDesc->bDescriptorType = UX_DEVICE_CLASS_VIDEO_CS_INTERFACE;
+  pFbFrameDesc->bDescriptorSubType = 0x11U;    /* VS_FRAME_FRAME_BASED */
+  pFbFrameDesc->bFrameIndex = 0x01U;
+  pFbFrameDesc->bmCapabilities = 0x00U;
+  pFbFrameDesc->wWidth = UVC_FRAME_WIDTH;
+  pFbFrameDesc->wHeight = UVC_FRAME_HEIGHT;
+  pFbFrameDesc->dwMinBitRate = UVC_H264_MIN_BIT_RATE;
+  pFbFrameDesc->dwMaxBitRate = UVC_H264_MAX_BIT_RATE;
+  if (pdev->Speed == (uint8_t)USBD_HIGH_SPEED)
+  {
+    pFbFrameDesc->dwDefaultFrameInterval = UVC_INTERVAL(UVC_CAM_FPS_HS);
+    pFbFrameDesc->dwFrameInterval = UVC_INTERVAL(UVC_CAM_FPS_HS);
+  }
+  else
+  {
+    pFbFrameDesc->dwDefaultFrameInterval = UVC_INTERVAL(UVC_CAM_FPS_FS);
+    pFbFrameDesc->dwFrameInterval = UVC_INTERVAL(UVC_CAM_FPS_FS);
+  }
+  pFbFrameDesc->bFrameIntervalType = 0x01U;
+  pFbFrameDesc->dwBytesPerLine = 0x00U;        /* 압축 형식은 0 */
+  *Sze += (uint32_t)sizeof(USBD_VIDEOFrameBasedFrameDescTypeDef);
+
+  USBD_FrameWork_VIDEO_ColorDesc(pConf, Sze);
 
   /* Standard VS Interface Descriptor: alternate setting 1 = data transfer */
   __USBD_FRAMEWORK_SET_IF(pdev->tclasslist[pdev->classId].Ifs[1], 1U, 1U,

@@ -266,7 +266,7 @@ ST가 공개한 예제 세 개를 합치는 방식으로 개발한다. 처음부
 **미결 사항**
 
 - [ ] CDC 용도 확정: PC와의 명령 통신만 할지, 보드의 물리 UART와 브리지해 115200으로 외부 장치와 연결할지
-- [ ] 태블릿 기종(USB OTG 지원)과 UVC 뷰어 앱 이름 확정, 그 앱의 MJPEG(M1)·H.264(M4) UVC 재생 여부 확인
+- [x] 태블릿 기종(USB OTG 지원)과 UVC 뷰어 앱 이름 확정, 그 앱의 MJPEG(M1)·H.264(M4) UVC 재생 여부 확인 → 2026-11-13: 갤럭시 노트20(One UI 5.1, Android 13) + ShenYao China "USB Camera" 12.3.2. 해상도 목록에 MJPEG·H.264 1280x720이 함께 보이고 둘 다 재생 확인(H.264는 UVC 1.1 frame-based)
 - [ ] 태블릿 뷰어 앱의 디코딩·표시 지연 실측(100 ms 목표 달성 여부를 좌우, M4)
 - [ ] H.264 페이로드 방식(UVC 1.5 H.264 / UVC 1.1 frame-based / MPEG-2 TS) 결정(M4)
 - [ ] H.264 profile(Baseline/Main)과 기본 비트레이트 확정

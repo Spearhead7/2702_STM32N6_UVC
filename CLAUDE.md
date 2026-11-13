@@ -48,6 +48,8 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 - M1: 예제 3개 모두 Windows PC에서 동작 확인. 태블릿 UVC 뷰어 확인과 기종·앱 이름 기록(PRD 10장)은 사용자가 나중에 한다.
 - **M2 완료**(2026-11-13): `fw/`(CubeIDE 프로젝트 `STM32N6_UVC`)의 CDC 에코 + UVC 고정 MJPEG composite가 Windows에서 동시 동작 확인.
 - **M3 완료**(2026-11-13): IMX335 → DCMIPP/ISP → VENC JPEG → 프레임 큐 → UVC 1280×720 30fps가 Windows 카메라 앱·VLC에서 동작(USB DMA, HS 1024 B×3). 영상 중 CDC 에코·앱 재시작 OK. 장치 내부 지연 평균 약 57 ms(목표 50 ms)는 1-B H.264(M4)에서 다시 확인하기로 함. 태블릿 확인은 나중에. 참고 코드 태그 `m3-mjpeg-ref`. 5초마다 USART1에 `VIDEO:`/`UVC:`/`LAT` 통계.
+- **M4 계획**(2026-11-13): `docs/m4-plan.md`(M4-1 참고 코드 확보 → M4-2 H.264 인코더 → M4-3 frame-based UVC → M4-4 UVC 1.5 → M4-5 태블릿 → M4-6 지연·화질 → M4-7 확정·MJPEG 삭제).
+- **M4 진행**(2026-11-13): M4-2 H.264 인코더(VideoEncoder h264 소스, Debug에서도 이 폴더만 -Os), M4-3 UVC에 MJPEG(형식 1) + H.264 frame-based(형식 2), Commit 형식으로 인코더 전환, M4-5 갤럭시 노트20(Android 13) + ShenYao USB Camera 12.3.2에서 MJPEG·H.264 모두 재생 → M4-4(UVC 1.5)는 생략. H.264 장치 내부 지연 평균 약 51 ms / 최대 약 68 ms(IDR). 다음은 M4-6 지연·화질. Windows 카메라 앱은 MJPEG를 고르므로 H.264 확인은 ffmpeg `-vcodec h264 ... -c copy -copyinkf`로 녹화.
 - HardFault 시 원인 레지스터·PC·스레드 이름이 USART1로 출력된다. PC는 `arm-none-eabi-addr2line -f -e fw/Debug/STM32N6_UVC.elf <PC>`로 찾는다. Debug(-O0)는 스택을 많이 쓰니 스레드 스택은 넉넉히 잡는다.
 
 ## 펌웨어 구조 (fw/)

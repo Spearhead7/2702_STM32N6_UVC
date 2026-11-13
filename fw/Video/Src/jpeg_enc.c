@@ -14,25 +14,9 @@
 #include "ewl.h"
 #include "ewl_impl.h"
 
-/* EWL(인코더 OS 래퍼) 작업 메모리. 인코더 인스턴스·내부 버퍼가 여기서 할당된다.
-   JPEG는 참조 프레임이 없어 작다. H.264(1-B)에서는 크기를 다시 잡는다. */
-#define JPEG_EWL_POOL_SIZE   (256U * 1024U)
-static uint8_t jpeg_ewl_pool[JPEG_EWL_POOL_SIZE] IN_PSRAM;
-
+/* EWL 작업 메모리는 venc_ewl.c(JPEG·H.264 공용) */
 static JpegEncInst jpeg_inst = NULL;
 static JpegEncCfg  jpeg_cfg;
-
-/* ewl_impl.c가 EWLInit()에서 부르는 콜백(약한 기본 정의를 덮어쓴다) */
-void EWLPoolChoiceCb(uint8_t **pool_ptr, size_t *size)
-{
-  *pool_ptr = jpeg_ewl_pool;
-  *size     = JPEG_EWL_POOL_SIZE;
-}
-
-void EWLPoolReleaseCb(uint8_t **pool_ptr)
-{
-  (void)pool_ptr;
-}
 
 int32_t jpeg_enc_init(uint32_t width, uint32_t height, uint32_t qlevel)
 {

@@ -120,7 +120,7 @@ int main(void)
   /* Call PreOsInit function */
   USBPD_PreInitOs();
   /* USER CODE BEGIN 2 */
-  printf("\r\n=== STM32N6 UVC (M3: camera MJPEG 720p30 + CDC echo) ===\r\n");
+  printf("\r\n=== STM32N6 UVC (M4: camera MJPEG/H.264 720p30 + CDC echo) ===\r\n");
   /* 외부 PSRAM: 영상 버퍼가 있으므로 ThreadX(영상 스레드) 시작 전에 켠다 */
   PSRAM_Init();
   /* USER CODE END 2 */

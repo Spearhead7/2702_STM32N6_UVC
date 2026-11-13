@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "vframe_queue.h"
+#include "video_app.h"
 #include "vtime.h"
 #include <stdio.h>
 #include "fast_copy.h"
@@ -65,6 +66,12 @@ static vfq_frame_t *uvc_frame = UX_NULL;
 static uint32_t     uvc_frame_off = 0U;
 static uint32_t     uvc_last_seq = 0U;
 static uint8_t      uvc_fid = 0U;
+/* 호스트가 Commit으로 고른 형식(VFQ_FMT_*). 디스크립터 형식 1 = MJPEG, 2 = H.264.
+   스트림을 열 때 인코더를 이 형식으로 바꾸고, 형식이 다른 프레임은 보내지 않는다.
+   H.264는 스트림 시작 후 키프레임(IDR, SPS/PPS 포함)부터 보낸다. */
+static uint32_t     uvc_format = VFQ_FMT_MJPEG;
+static uint8_t      uvc_need_key = 1U;
+volatile uint32_t   uvc_skipped_frames = 0U;   /* 형식이 다르거나 키프레임 대기로 건너뛴 프레임 */
 
 /* 통계(디버그용) */
 volatile uint32_t   uvc_frames_sent = 0U;
@@ -146,6 +153,12 @@ static USBD_VideoControlTypeDef video_Commit_Control =
 /* USER CODE BEGIN PFP */
 static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream);
 static VOID video_stream_reset(VOID);
+
+/* 디스크립터에 있는 형식 번호인지 */
+static UCHAR uvc_format_index_valid(UCHAR idx)
+{
+  return (UCHAR)((idx == UVC_FMT_IDX_MJPEG) || (idx == UVC_FMT_IDX_H264));
+}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -220,8 +233,11 @@ VOID USBD_VIDEO_StreamChange(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
     return;
   }
 
-  /* 영상 시작: 가장 최근 프레임부터 보낸다 */
+  /* 영상 시작: 호스트가 고른 형식으로 인코더를 바꾸고(이미 같으면 그대로) 키프레임을 요청한다.
+     가장 최근 프레임부터 보낸다. */
   video_stream_reset();
+  video_set_format(uvc_format);
+  video_request_keyframe();
   uvc_state = UVC_PLAY_STATUS_STREAMING;
 
   for (ULONG i = 0U; i < UVC_PREFILL_PAYLOADS; i++)
@@ -293,6 +309,13 @@ UINT USBD_VIDEO_StreamRequest(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
       {
         case UX_DEVICE_CLASS_VIDEO_SET_CUR:
 
+          /* 호스트가 제안한 형식·프레임 번호를 받아 둔다(나머지 값은 장치가 정한다) */
+          if ((transfer->ux_slave_transfer_request_actual_length >= 4U) &&
+              (uvc_format_index_valid(data[2]) != 0U))
+          {
+            video_Probe_Control.bFormatIndex = data[2];
+            video_Probe_Control.bFrameIndex = 0x01U;
+          }
           status = UX_SUCCESS;
 
           break;
@@ -347,6 +370,14 @@ UINT USBD_VIDEO_StreamRequest(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
       {
         case UX_DEVICE_CLASS_VIDEO_SET_CUR:
 
+          /* 형식 확정: 스트림을 열 때(대체 설정 1) 이 형식으로 인코딩한다 */
+          if ((transfer->ux_slave_transfer_request_actual_length >= 4U) &&
+              (uvc_format_index_valid(data[2]) != 0U))
+          {
+            video_Commit_Control.bFormatIndex = data[2];
+            video_Commit_Control.bFrameIndex = 0x01U;
+            uvc_format = (data[2] == UVC_FMT_IDX_H264) ? VFQ_FMT_H264 : VFQ_FMT_MJPEG;
+          }
           status = UX_SUCCESS;
 
           break;
@@ -425,6 +456,7 @@ static VOID video_stream_reset(VOID)
     uvc_frame = UX_NULL;
   }
   uvc_frame_off = 0U;
+  uvc_need_key = 1U;
   uvc_pay_written = 0U;
   uvc_pay_done = 0U;
   uvc_lat_pend.valid = 0U;
@@ -472,8 +504,17 @@ static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
   if (uvc_frame == UX_NULL)
   {
     uvc_frame = vfq_acquire_latest(uvc_last_seq);
+    if ((uvc_frame != UX_NULL) &&
+        ((uvc_frame->format != (vfq_format_t)uvc_format) || ((uvc_need_key != 0U) && (uvc_frame->key == 0U))))
+    {
+      uvc_last_seq = uvc_frame->seq;
+      vfq_release(uvc_frame);
+      uvc_frame = UX_NULL;
+      uvc_skipped_frames++;
+    }
     if (uvc_frame != UX_NULL)
     {
+      uvc_need_key = 0U;
       uvc_frame_off = 0U;
       uvc_fid ^= UVC_HDR_FID;
       uvc_usb_start = vtime_now();
@@ -586,10 +627,12 @@ void video_stats_hook(uint32_t period_ms)
     period_ms = 1U;
   }
 
-  printf("UVC: %s, sent %lu.%lu fps, empty %lu, isoinc %lu, buferr %lu, getfail %lu\r\n",
+  printf("UVC: %s %s, sent %lu.%lu fps, empty %lu, skipfrm %lu, isoinc %lu, buferr %lu, getfail %lu\r\n",
          (uvc_state == UVC_PLAY_STATUS_STREAMING) ? "streaming" : "stopped",
+         (uvc_format == VFQ_FMT_H264) ? "H264" : "MJPEG",
          (unsigned long)(d * 1000U / period_ms), (unsigned long)((d * 10000U / period_ms) % 10U),
-         (unsigned long)uvc_empty_payloads, (unsigned long)ux_dcd_stm32_iso_in_incomplete_count,
+         (unsigned long)uvc_empty_payloads, (unsigned long)uvc_skipped_frames,
+         (unsigned long)ux_dcd_stm32_iso_in_incomplete_count,
          (unsigned long)buferr, (unsigned long)uvc_payload_get_fail);
 
   /* 지연(5초 평균/최대, ms 소수 첫째 자리). 출력 후 누적값을 비운다. */

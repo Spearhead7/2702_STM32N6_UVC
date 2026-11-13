@@ -296,7 +296,12 @@ typedef struct
   uint8_t iTerminal;
 } __PACKED USBD_VIDEOOutputTerminalDescTypeDef;
 
-/* Video Streaming Interface Input Header Descriptor */
+/* VS 인터페이스의 형식 수: 1 = MJPEG, 2 = H.264 frame-based (M4-3) */
+#define UVC_NUM_FORMATS                               2U
+#define UVC_FMT_IDX_MJPEG                             1U
+#define UVC_FMT_IDX_H264                              2U
+
+/* Video Streaming Interface Input Header Descriptor (13 + 형식 수 바이트) */
 typedef struct
 {
   uint8_t bLength;
@@ -311,7 +316,7 @@ typedef struct
   uint8_t bTriggerSupport;
   uint8_t bTriggerUsage;
   uint8_t bControlSize;
-  uint8_t bmaControls;
+  uint8_t bmaControls[UVC_NUM_FORMATS];   /* 형식마다 1바이트 */
 } __PACKED USBD_VIDEOVSHeaderDescTypeDef;
 
 /* Video Format Descriptor*/
@@ -347,6 +352,53 @@ typedef struct
   uint8_t bFrameIntervalType;
   uint32_t dwFrameInterval;
 } __PACKED USBD_VIDEOFrameDescTypeDef;
+
+/* Frame-based Payload Format Descriptor (UVC 1.1, 28 B). H.264용 */
+typedef struct
+{
+  uint8_t bLength;
+  uint8_t bDescriptorType;
+  uint8_t bDescriptorSubType;
+  uint8_t bFormatIndex;
+  uint8_t bNumFrameDescriptors;
+  uint8_t guidFormat[16];
+  uint8_t bBitsPerPixel;
+  uint8_t bDefaultFrameIndex;
+  uint8_t bAspectRatioX;
+  uint8_t bAspectRatioY;
+  uint8_t bmInterlaceFlags;
+  uint8_t bCopyProtect;
+  uint8_t bVariableSize;
+} __PACKED USBD_VIDEOFrameBasedFormatDescTypeDef;
+
+/* Frame-based Frame Descriptor (UVC 1.1, 프레임 간격 1개 = 30 B) */
+typedef struct
+{
+  uint8_t bLength;
+  uint8_t bDescriptorType;
+  uint8_t bDescriptorSubType;
+  uint8_t bFrameIndex;
+  uint8_t bmCapabilities;
+  uint16_t wWidth;
+  uint16_t wHeight;
+  uint32_t dwMinBitRate;
+  uint32_t dwMaxBitRate;
+  uint32_t dwDefaultFrameInterval;
+  uint8_t bFrameIntervalType;
+  uint32_t dwBytesPerLine;
+  uint32_t dwFrameInterval;
+} __PACKED USBD_VIDEOFrameBasedFrameDescTypeDef;
+
+/* Color Matching Descriptor (6 B) */
+typedef struct
+{
+  uint8_t bLength;
+  uint8_t bDescriptorType;
+  uint8_t bDescriptorSubType;
+  uint8_t bColorPrimaries;
+  uint8_t bTransferCharacteristics;
+  uint8_t bMatrixCoefficients;
+} __PACKED USBD_VIDEOColorMatchingDescTypeDef;
 #endif /* USBD_VIDEO_CLASS_ACTIVATED == 1U */
 
 /* Exported functions prototypes ---------------------------------------------*/
@@ -439,9 +491,14 @@ uint16_t USBD_Get_Configuration_Number(uint8_t class_type, uint8_t interface_typ
 #define UVC_MIN_BIT_RATE(n)                           (UVC_FRAME_WIDTH * UVC_FRAME_HEIGHT * 16U * (n))
 #define UVC_MAX_BIT_RATE(n)                           (UVC_FRAME_WIDTH * UVC_FRAME_HEIGHT * 16U * (n))
 #define UVC_INTERVAL(n)                               (10000000U/(n))
-#define UVC_MAX_FRAME_SIZE                            (512U * 1024U)  /* JPEG 한 장 최대 = VFQ_SLOT_SIZE */
+#define UVC_MAX_FRAME_SIZE                            (512U * 1024U)  /* 한 프레임 최대 = VFQ_SLOT_SIZE */
+/* H.264 프레임 디스크립터의 비트레이트(bps). 인코더 CBR 목표 4 Mbps, 최대는 여유를 둔다. */
+#define UVC_H264_MIN_BIT_RATE                         1000000U
+#define UVC_H264_MAX_BIT_RATE                         16000000U
 
-#define VC_HEADER_SIZE                                0x37U
+/* VS 헤더 wTotalLength: VS 헤더(13+형식 수) + MJPEG(형식 11 + 프레임 30 + 색 6)
+   + H.264(형식 28 + 프레임 30 + 색 6) */
+#define VC_HEADER_SIZE                                (13U + UVC_NUM_FORMATS + 11U + 30U + 6U + 28U + 30U + 6U)
 
 #ifndef USBD_CONFIG_STR_DESC_IDX
 #define USBD_CONFIG_STR_DESC_IDX                      0U

@@ -16,6 +16,7 @@
 #include "video_cfg.h"
 #include "vframe_queue.h"
 #include "jpeg_enc.h"
+#include "h264_enc.h"
 #include "vtime.h"
 #include "stm32n6570_discovery_camera.h"
 #include "stm32n6xx_ll_venc.h"
@@ -31,7 +32,27 @@ static const video_cfg_t video_cfg =
   .height = VIDEO_DEFAULT_HEIGHT,
   .fps    = VIDEO_DEFAULT_FPS,
   .jpeg_q = VIDEO_DEFAULT_JPEG_Q,
+  .format  = VIDEO_DEFAULT_FORMAT,
+  .bitrate = VIDEO_DEFAULT_BITRATE,
+  .gop     = VIDEO_DEFAULT_GOP,
 };
+
+/* 형식 바꾸기 요청(UVC 스레드 → 영상 스레드) */
+static volatile uint32_t video_fmt_req = VIDEO_DEFAULT_FORMAT;
+static uint32_t          video_fmt_cur = 0xFFFFFFFFU;   /* 아직 인코더 없음 */
+
+void video_set_format(uint32_t format)
+{
+  if ((format == VFQ_FMT_MJPEG) || (format == VFQ_FMT_H264))
+  {
+    video_fmt_req = format;
+  }
+}
+
+void video_request_keyframe(void)
+{
+  h264_enc_request_idr();
+}
 
 const video_cfg_t *video_cfg_get(void)
 {
@@ -309,11 +330,17 @@ static void video_print_stats(uint32_t period_ms)
   uint32_t d_cap = cap - prev_cap;
   uint32_t d_enc = enc - prev_enc;
 
-  printf("VIDEO: cap %lu.%lu fps, enc %lu.%lu fps, jpeg last %lu KB max %lu KB, "
+  uint32_t sum = stats.sum_size;
+  stats.sum_size = 0U;
+
+  printf("VIDEO: %s cap %lu.%lu fps, enc %lu.%lu fps, avg %lu KB last %lu KB max %lu KB idr %lu KB, "
          "enc %lu ms (max %lu), skip %lu, noslot %lu, recycle %lu, err %lu, pipeerr %lu\r\n",
+         (stats.format == VFQ_FMT_H264) ? "H264" : "MJPEG",
          (unsigned long)(d_cap * 1000U / period_ms), (unsigned long)((d_cap * 10000U / period_ms) % 10U),
          (unsigned long)(d_enc * 1000U / period_ms), (unsigned long)((d_enc * 10000U / period_ms) % 10U),
+         (unsigned long)((d_enc != 0U) ? (sum / d_enc / 1024U) : 0U),
          (unsigned long)(stats.last_size / 1024U), (unsigned long)(stats.max_size / 1024U),
+         (unsigned long)(stats.last_idr_size / 1024U),
          (unsigned long)stats.last_enc_ms, (unsigned long)stats.max_enc_ms,
          (unsigned long)stats.cap_skipped, (unsigned long)stats.no_slot,
          (unsigned long)vfq_dropped(), (unsigned long)stats.enc_errors,
@@ -340,6 +367,49 @@ static void video_fail(int32_t step, const char *what)
   }
 }
 
+/* 요청된 형식과 지금 인코더가 다르면 다시 만든다. 영상 스레드에서만 부른다. */
+static void video_switch_encoder(void)
+{
+  const video_cfg_t *cfg = video_cfg_get();
+  uint32_t req = video_fmt_req;
+  int32_t  ret;
+
+  if (req == video_fmt_cur)
+  {
+    return;
+  }
+
+  /* VENC는 인스턴스 하나만: 지금 것을 지우고 새로 만든다 */
+  jpeg_enc_deinit();
+  h264_enc_deinit();
+
+  if (req == VFQ_FMT_H264)
+  {
+    h264_enc_cfg_t hc;
+    hc.width       = cfg->width;
+    hc.height      = cfg->height;
+    hc.fps         = cfg->fps;
+    hc.bitrate_bps = cfg->bitrate;
+    hc.gop         = cfg->gop;
+    ret = h264_enc_init(&hc);
+  }
+  else
+  {
+    ret = jpeg_enc_init(cfg->width, cfg->height, cfg->jpeg_q);
+  }
+
+  if (ret != 0)
+  {
+    printf("VIDEO: %s encoder init ret %ld\r\n", (req == VFQ_FMT_H264) ? "h264" : "jpeg", (long)ret);
+    video_fail(-3, "VENC init");
+  }
+
+  video_fmt_cur = req;
+  stats.format = req;
+  stats.max_size = 0U;
+  printf("VIDEO: encoder %s\r\n", (req == VFQ_FMT_H264) ? "H264" : "MJPEG");
+}
+
 static void video_thread_entry(ULONG arg)
 {
   const video_cfg_t *cfg = video_cfg_get();
@@ -347,8 +417,10 @@ static void video_thread_entry(ULONG arg)
 
   (void)arg;
 
-  printf("VIDEO: %lux%lu %lu fps, JPEG q%lu\r\n", (unsigned long)cfg->width,
-         (unsigned long)cfg->height, (unsigned long)cfg->fps, (unsigned long)cfg->jpeg_q);
+  printf("VIDEO: %lux%lu %lu fps, JPEG q%lu, H264 %lu kbps gop %lu, start %s\r\n", (unsigned long)cfg->width,
+         (unsigned long)cfg->height, (unsigned long)cfg->fps, (unsigned long)cfg->jpeg_q,
+         (unsigned long)(cfg->bitrate / 1000U), (unsigned long)cfg->gop,
+         (cfg->format == VFQ_FMT_H264) ? "H264" : "MJPEG");
 
   vfq_init();
 
@@ -366,12 +438,7 @@ static void video_thread_entry(ULONG arg)
 
   LL_VENC_Init();
 
-  ret = jpeg_enc_init(cfg->width, cfg->height, cfg->jpeg_q);
-  if (ret != 0)
-  {
-    printf("VIDEO: jpeg_enc_init ret %ld\r\n", (long)ret);
-    video_fail(-3, "VENC JPEG init");
-  }
+  /* 인코더는 루프 안에서 video_fmt_req에 맞춰 만든다(video_switch_encoder) */
 
   cap_write_idx = 0U;
   cap_ready_idx = CAP_NONE;
@@ -409,6 +476,7 @@ static void video_thread_entry(ULONG arg)
 
       if (idx != CAP_NONE)
       {
+        video_switch_encoder();
         f = vfq_producer_get();
         if (f == NULL)
         {
@@ -416,8 +484,17 @@ static void video_thread_entry(ULONG arg)
         }
         else
         {
+          uint8_t key = 1U;
+
           t0 = HAL_GetTick();
-          ret = jpeg_enc_frame(cap_buf[idx], f->data, f->capacity);
+          if (video_fmt_cur == VFQ_FMT_H264)
+          {
+            ret = h264_enc_frame(cap_buf[idx], f->data, f->capacity, &key);
+          }
+          else
+          {
+            ret = jpeg_enc_frame(cap_buf[idx], f->data, f->capacity);
+          }
           stats.last_enc_ms = HAL_GetTick() - t0;
           if (stats.last_enc_ms > stats.max_enc_ms)
           {
@@ -428,14 +505,20 @@ static void video_thread_entry(ULONG arg)
           {
             f->size   = (uint32_t)ret;
             f->ts_ms  = tick;
-            f->format = VFQ_FMT_MJPEG;
-            f->key    = 1U;
+            f->format = (vfq_format_t)video_fmt_cur;
+            f->key    = key;
             f->t_cap_start = t_start;
             f->t_cap_end   = t_end;
             f->t_enc_end   = vtime_now();
             vfq_producer_commit(f);
             stats.enc_frames++;
             stats.last_size = (uint32_t)ret;
+            stats.sum_size += (uint32_t)ret;
+            if ((video_fmt_cur == VFQ_FMT_H264) && (key != 0U))
+            {
+              stats.idr_frames++;
+              stats.last_idr_size = (uint32_t)ret;
+            }
             if ((uint32_t)ret > stats.max_size)
             {
               stats.max_size = (uint32_t)ret;
@@ -446,7 +529,8 @@ static void video_thread_entry(ULONG arg)
             vfq_producer_abort(f);
             if (stats.enc_errors == 0U)
             {
-              printf("VIDEO: jpeg encode error %ld\r\n", (long)ret);
+              printf("VIDEO: %s encode error %ld\r\n",
+                     (video_fmt_cur == VFQ_FMT_H264) ? "h264" : "jpeg", (long)ret);
             }
             stats.enc_errors++;
           }
