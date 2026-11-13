@@ -45,7 +45,7 @@ extern "C" {
 
 #define TX_APP_MEM_POOL_SIZE                     1024
 
-#define UX_APP_MEM_POOL_SIZE                     (36U * 1024U)
+#define UX_APP_MEM_POOL_SIZE                     (52U * 1024U)  /* USBX 44K + USBX 스레드 스택. 비캐시 영역(링커) */
 
 #define USBPD_DEVICE_APP_MEM_POOL_SIZE           (8U * 1024U)  /* CAD·PE 스택 2048씩 */
 

@@ -16,6 +16,7 @@
 #include "video_cfg.h"
 #include "vframe_queue.h"
 #include "jpeg_enc.h"
+#include "vtime.h"
 #include "stm32n6570_discovery_camera.h"
 #include "stm32n6xx_ll_venc.h"
 #include <stdio.h>
@@ -41,7 +42,7 @@ const video_cfg_t *video_cfg_get(void)
  * 스레드, 버퍼
  * ------------------------------------------------------------------------- */
 #define VIDEO_THREAD_STACK_SIZE   (8U * 1024U)   /* Debug(-O0)와 ISP 알고리즘 여유 */
-#define VIDEO_THREAD_PRIO         15U            /* USBX(10)보다 낮고 CDC(20)보다 높다 */
+#define VIDEO_THREAD_PRIO         22U            /* USBX 클래스 스레드(UVC 전송, 20)보다 낮게: 전송이 ISP 계산에 밀리지 않게 */
 #define VIDEO_STATS_PERIOD_MS     5000U
 #define VIDEO_FRAME_TIMEOUT_MS    500U
 
@@ -62,6 +63,10 @@ static volatile uint8_t  cap_write_idx  = 0U;        /* DCMIPP가 쓰고 있는 
 static volatile uint8_t  cap_ready_idx  = CAP_NONE;  /* 다 찍혀서 인코딩을 기다리는 버퍼 */
 static volatile uint8_t  cap_enc_idx    = CAP_NONE;  /* 인코딩 중인 버퍼 */
 static volatile uint32_t cap_ready_tick = 0U;
+/* 지연 측정(vtime 사이클): 지금 찍히는 프레임의 시작, 인코딩을 기다리는 프레임의 시작·끝 */
+static volatile uint32_t cap_cur_start   = 0U;
+static volatile uint32_t cap_ready_start = 0U;
+static volatile uint32_t cap_ready_end   = 0U;
 
 static video_stats_t stats;
 
@@ -75,6 +80,7 @@ UINT video_app_init(void)
   UINT ret;
 
   memset(&stats, 0, sizeof(stats));
+  vtime_init();
   stats.init_status = 1;   /* 아직 시작 전 */
 
   ret = tx_event_flags_create(&video_flags, "video flags");
@@ -226,6 +232,14 @@ HAL_StatusTypeDef MX_DCMIPP_Init(DCMIPP_HandleTypeDef *hdcmipp)
 /* ---------------------------------------------------------------------------
  * DCMIPP 콜백(인터럽트 문맥)
  * ------------------------------------------------------------------------- */
+/* 프레임 시작(VSYNC). 지연 측정용 시각만 기록한다.
+   BSP(VENC_USB 판)는 파이프와 관계없이 instance 0으로 부른다. 지금은 PIPE1만 돌리므로 그대로 쓴다. */
+void BSP_CAMERA_VsyncEventCallback(uint32_t instance)
+{
+  (void)instance;
+  cap_cur_start = vtime_now();
+}
+
 void BSP_CAMERA_FrameEventCallback(uint32_t instance)
 {
   uint8_t done;
@@ -252,8 +266,10 @@ void BSP_CAMERA_FrameEventCallback(uint32_t instance)
   {
     stats.cap_skipped++;   /* 인코더가 이전 프레임을 아직 안 가져감 */
   }
-  cap_ready_idx  = done;
-  cap_ready_tick = HAL_GetTick();
+  cap_ready_idx   = done;
+  cap_ready_tick  = HAL_GetTick();
+  cap_ready_end   = vtime_now();
+  cap_ready_start = cap_cur_start;
   stats.cap_frames++;
 
   (void)tx_event_flags_set(&video_flags, FLAG_FRAME, TX_OR);
@@ -289,6 +305,13 @@ static void video_print_stats(uint32_t period_ms)
 
   prev_cap = cap;
   prev_enc = enc;
+}
+
+/* 통계 출력 뒤에 불린다. 영상 소비자(UVC 등)가 자기 통계를 덧붙일 때 재정의한다.
+   video_app은 소비자를 모르므로 약한 정의로 둔다. */
+__attribute__((weak)) void video_stats_hook(uint32_t period_ms)
+{
+  (void)period_ms;
 }
 
 static void video_fail(int32_t step, const char *what)
@@ -353,6 +376,8 @@ static void video_thread_entry(ULONG arg)
     uint8_t idx;
     uint32_t tick;
     uint32_t t0;
+    uint32_t t_start;
+    uint32_t t_end;
     vfq_frame_t *f;
 
     /* ISP 자동 노출·화이트밸런스(프레임마다 한 번) */
@@ -367,6 +392,8 @@ static void video_thread_entry(ULONG arg)
       cap_ready_idx = CAP_NONE;
       cap_enc_idx = idx;
       tick = cap_ready_tick;
+      t_start = cap_ready_start;
+      t_end = cap_ready_end;
       __enable_irq();
 
       if (idx != CAP_NONE)
@@ -392,6 +419,9 @@ static void video_thread_entry(ULONG arg)
             f->ts_ms  = tick;
             f->format = VFQ_FMT_MJPEG;
             f->key    = 1U;
+            f->t_cap_start = t_start;
+            f->t_cap_end   = t_end;
+            f->t_enc_end   = vtime_now();
             vfq_producer_commit(f);
             stats.enc_frames++;
             stats.last_size = (uint32_t)ret;
@@ -428,6 +458,7 @@ static void video_thread_entry(ULONG arg)
     {
       uint32_t now = HAL_GetTick();
       video_print_stats(now - last_stats_tick);
+      video_stats_hook(now - last_stats_tick);
       last_stats_tick = now;
     }
   }

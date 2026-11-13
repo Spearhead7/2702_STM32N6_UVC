@@ -26,6 +26,7 @@
 #define UX_SOURCE_CODE
 
 #include "ux_api.h"
+#include "fast_copy.h"   /* N6UVC 수정(M3): Video/Inc */
 
 
 /**************************************************************************/ 
@@ -73,19 +74,14 @@
 VOID  _ux_utility_memory_copy(VOID *memory_destination, VOID *memory_source, ULONG length)
 {
 
-UCHAR *   source;
-UCHAR *   destination;
 
-    /* Setup byte oriented source and destination pointers.  */
-    source =  (UCHAR *) memory_source;
-    destination =  (UCHAR *) memory_destination;
-
-    /* Loop to perform the copy.  */
-    while(length--)
+    /* N6UVC 수정(M3): 원본은 1바이트씩 복사하는 루프다. 영상 스레드가 페이로드(3 KB)마다
+       이 함수로 엔드포인트 버퍼에 복사하므로 전송 사이 간격이 길어져 USB 처리량이 떨어졌다.
+       USBX 안의 호출은 모두 겹치지 않는 영역 복사(원본 주석 "Use case of memcpy is verified")라
+       워드 단위 fast_memcpy로 바꾼다(newlib-nano memcpy도 1바이트 루프다). */
+    if (length != 0U)
     {
-
-        /* Copy one byte.  */
-        *destination++ =  *source++;
+        fast_memcpy(memory_destination, memory_source, length);
     }
 
     /* Return to caller.  */

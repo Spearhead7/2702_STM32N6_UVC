@@ -53,19 +53,21 @@ void MX_USB1_OTG_HS_PCD_Init(void)
   hpcd_USB_OTG_HS1.Init.lpm_enable = DISABLE;
   hpcd_USB_OTG_HS1.Init.use_dedicated_ep1 = DISABLE;
   hpcd_USB_OTG_HS1.Init.vbus_sensing_enable = DISABLE;
-  hpcd_USB_OTG_HS1.Init.dma_enable = DISABLE;
+  /* M3: USB 내부 DMA 사용(x-cube-n6-camera-capture와 같음). slave 모드는 isochronous 영상에서
+     패킷을 제때 못 채워 MJPEG 아래쪽이 깨졌다. DMA 버퍼(USBX 풀)는 비캐시 영역에 있어야 한다. */
+  hpcd_USB_OTG_HS1.Init.dma_enable = ENABLE;
   if (HAL_PCD_Init(&hpcd_USB_OTG_HS1) != HAL_OK)
   {
     Error_Handler();
   }
   /* USER CODE BEGIN USB1_OTG_HS_Init 2 */
 
-  /* FIFO 단위는 32비트 word, 전체 약 1024 word.
-     합계 0x100+0x10+0x40+0x10+0x200 = 0x370 word.
-     isochronous IN(영상)은 FIFO가 MPS(M3: 1024 B = 256 word)보다 커야 한다(2패킷분). */
+  /* FIFO 단위는 32비트 word, 전체 약 1024 word(DMA 모드는 끝부분 일부를 코어가 쓴다).
+     합계 0xC0+0x10+0x40+0x10+0x280 = 0x3A0 word (x-cube-n6-camera-capture는 0x390).
+     영상 EP는 1024 B x 3/마이크로프레임. DMA가 전송 중에 FIFO를 채우므로 2.5패킷분(0x280)으로 둔다. */
 
-  /* Rx FIFO: 모든 OUT 공용 (CDC bulk OUT 512 B 포함) */
-  HAL_PCDEx_SetRxFiFo(&hpcd_USB_OTG_HS1, 0x100);
+  /* Rx FIFO: 모든 OUT 공용 (CDC bulk OUT 512 B 1개 + SETUP·상태 여유) */
+  HAL_PCDEx_SetRxFiFo(&hpcd_USB_OTG_HS1, 0xC0);
 
   /* Tx FIFO 0: EP0 control */
   HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS1, 0, 0x10);
@@ -77,7 +79,7 @@ void MX_USB1_OTG_HS_PCD_Init(void)
   HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS1, 2, 0x10);
 
   /* Tx FIFO 3: UVC video isochronous IN (0x83) */
-  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS1, 3, 0x200);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS1, 3, 0x280);
 
   /* USER CODE END USB1_OTG_HS_Init 2 */
 
@@ -110,7 +112,8 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
     __HAL_RCC_USB1_OTG_HS_PHY_CLK_ENABLE();
 
     /* USB1_OTG_HS interrupt Init */
-    HAL_NVIC_SetPriority(USB1_OTG_HS_IRQn, 7, 0);
+    /* M3: 카메라(DCMIPP/CSI)·VENC 인터럽트(7)보다 높게. slave 모드 isochronous는 125 us 안에 FIFO를 채워야 한다. */
+    HAL_NVIC_SetPriority(USB1_OTG_HS_IRQn, 6, 0);
     HAL_NVIC_EnableIRQ(USB1_OTG_HS_IRQn);
   /* USER CODE BEGIN USB1_OTG_HS_MspInit 1 */
     /* Reset USB peripherals and configure the HSE clock */

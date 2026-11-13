@@ -186,15 +186,6 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM
 
-  /* USBX 메모리 풀. 예제는 비캐시 영역 0x341FA000에 고정했지만 풀이 커져(28K) 넘쳤다.
-     USB DMA를 쓰지 않으므로 일반 RAM에 둔다(Ux_Device_Video 예제도 일반 RAM). */
-  .usbx_bss (NOLOAD) :
-  {
-    . = ALIGN(8);
-    *(.UsbxPoolSection)
-    . = ALIGN(8);
-  } >RAM
-
   /* User_heap_stack section, used to check that there is enough "RAM" Ram  type memory left */
   ._user_heap_stack :
   {
@@ -205,6 +196,17 @@ SECTIONS
     . = . + _Min_Stack_Size;
     . = ALIGN(8);
   } >RAM
+  /* 캐시 RAM(0x341E0000~0x341EFFFF, 64K)을 넘으면 비캐시 영역과 겹친다. */
+  ASSERT(. <= 0x341F0000, "cacheable RAM overflow: data/bss > 64K")
+
+  /* M3(USB DMA): RAM 위쪽 64K(0x341F0000~0x341FFFFF)는 MPU 비캐시(main.c MPU_Config).
+     USB DMA가 직접 읽고 쓰는 USBX 메모리 풀(엔드포인트 전송 버퍼 포함)을 여기 둔다.
+     맨 끝은 MSP 스택(_estack = 0x34200000, 0xE00). */
+  .usbx_bss 0x341F0000 (NOLOAD) :
+  {
+    *(.UsbxPoolSection)
+  } >RAM
+  ASSERT(. <= 0x341FD000, "USBX pool > 52K overlaps .usbx_data")
   /* PSRAM 영역(IN_PSRAM). NOLOAD: 디버거가 굽지 않고, 시작 코드도 0으로 지우지 않는다. */
   .psram_bss (NOLOAD) :
   {
@@ -216,14 +218,15 @@ SECTIONS
     __psram_bss_end__ = .;
   } >PSRAM
 
-  .usbx_data 0x341F8000 (NOLOAD):
+  .usbx_data 0x341FD000 (NOLOAD):
   {
     *(.UsbHpcdSection)
   } >RAM
-  .uart_bss 0x341F9000 (NOLOAD):
+  .uart_bss 0x341FD800 (NOLOAD):
   {
     *(.UsbxAppSection)
   } >RAM
+  ASSERT(. <= _sstack, "non-cacheable sections overlap MSP stack")
   /* Remove information from the compiler libraries */
   /DISCARD/ :
   {

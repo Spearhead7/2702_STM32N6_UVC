@@ -31,6 +31,8 @@
 #include "ux_device_stack.h"
 #include "ux_utility.h"
 
+/* N6UVC 수정(M3): incomplete ISO IN 발생 횟수(디버그 통계) */
+volatile ULONG ux_dcd_stm32_iso_in_incomplete_count = 0U;
 #if defined(USBD_HAL_ISOINCOMPLETE_CALLBACK)
 static volatile UCHAR   iso_in_retry_pending[UX_DCD_STM32_MAX_ED];
 static volatile UCHAR   iso_out_retry_pending[UX_DCD_STM32_MAX_ED];
@@ -1431,6 +1433,9 @@ UINT                    status;
     if ((endpoint -> ux_slave_endpoint_descriptor.bmAttributes & UX_MASK_ENDPOINT_TYPE) == UX_ISOCHRONOUS_ENDPOINT &&
         (endpoint -> ux_slave_endpoint_descriptor.bEndpointAddress & UX_ENDPOINT_DIRECTION) == UX_ENDPOINT_IN)
     {
+        /* N6UVC 수정(M3): 발생 횟수만 센다(UVC 통계 isoinc). 재전송 동작은 ST 원본 그대로. */
+        ux_dcd_stm32_iso_in_incomplete_count++;
+
         transfer_request = &endpoint -> ux_slave_endpoint_transfer_request;
         if (ed -> ux_stm32_ed_interval_mask == 0U)
         {

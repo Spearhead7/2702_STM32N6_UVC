@@ -170,3 +170,89 @@
 - PRD 5장은 MJPEG에 high-bandwidth(1024×3)를 적어 두었지만, USB DMA를 쓰지 않는 지금은 FIFO가 부족해 1024×1로 했다(PRD 고침).
 
 확인 절차: `docs/m3-guide.md`.
+
+### 2026-11-13 1차 실행: 사용자 확인 결과
+
+| 항목 | 결과 |
+|---|---|
+| 부팅 로그 | PSRAM HSLV 퓨즈 켜짐, 200 MHz OK. 카메라 30.0 fps, 인코딩 30.0 fps, JPEG 66~67 KB, 인코딩 11~12 ms, skip·noslot·err·pipeerr 0 |
+| 영상 | Windows 카메라 앱에서 실제 영상, 색 정상, 찌그러짐 없음(16:9 크롭 확인) |
+| 문제 | **가끔 화면 맨 아래 한두 줄(MCU 행)이 검정·초록 띠로 깨짐**. 녹화 9초를 2 fps로 뽑은 18장 중 2장 |
+
+**분석**: 장치 안쪽(캡처·인코딩·큐)은 오류 0. 아래쪽만 깨지는 것은 JPEG 데이터 뒷부분이 호스트에 제대로 안 간 모양이다. USBX STM32 DCD는 incomplete ISO IN이 나면 같은 페이로드를 재전송하는데, HAL은 EP만 끄고 Tx FIFO를 비우지 않는다. USB DMA를 쓰지 않는 slave 모드에서는 못 나간 패킷이 FIFO에 남은 채 다시 쌓여 이후 패킷이 밀리는 것으로 본다.
+
+**조치(2차 펌웨어)**
+
+- `Middlewares/ST/usbx/.../ux_dcd_stm32_callback.c` `HAL_PCD_ISOINIncompleteCallback`: 재전송 전에 해당 EP Tx FIFO flush, 발생 횟수 카운트(`N6UVC 수정` 주석). ST 미들웨어 직접 수정이므로 패키지 갱신 시 다시 넣어야 한다.
+- USB OTG 인터럽트 우선순위 7 → 6(카메라·VENC 7보다 높게). ISP 통계 수집이 DCMIPP VSYNC 인터럽트 안에서 돈다.
+- 영상 스레드 우선순위 15 → 22(UVC 전송 스레드 20보다 낮게).
+- 5초마다 `UVC:` 통계 줄 추가(sent fps, empty, isoinc, buferr, getfail).
+
+### 2026-11-13 2차 실행: 사용자 확인 결과
+
+- `UVC:` 줄 확인(새 펌웨어). sent 30.0 fps, buferr 0, getfail 0. **isoinc가 초당 약 10~15회** 늘어난다. 아래쪽 깨짐은 여전함(카메라 앱에서 더 심함, VLC도 가끔).
+- VLC 4:3 표시는 DirectShow 기본 화면비 때문(코덱 정보 MJPG 1280×720 30.000030 fps). 비디오 → 화면비 → 16:9.
+
+**분석**: HAL의 EPDISD 처리를 다시 보니 Tx FIFO flush는 HAL이 이미 한다(`stm32n6xx_hal_pcd.c` EPDISD 분기). 1차 추정(FIFO 잔류)은 틀렸다. 대신 같은 인터럽트에서 XFRC(전송 완료)를 먼저 처리하고 EPDISD에서 incomplete 콜백을 부르므로, 패킷이 실제로 나갔는데 incomplete로도 잡히면 DCD가 **이미 완료된 페이로드를 한 번 더 보낸다**. 호스트는 같은 1 KB를 두 번 받아 그 뒤 JPEG 데이터가 밀리고, 다음 페이로드 arm과도 겹친다 → 그 지점부터 아래쪽이 깨진다.
+
+**조치(3차 펌웨어)**
+
+- `ux_dcd_stm32_callback.c` `HAL_PCD_ISOINIncompleteCallback`: 요청이 아직 `UX_TRANSFER_STATUS_PENDING`일 때만 재전송. 2차에서 넣은 FIFO flush는 중복이라 뺐다.
+- `UVC:` 줄에 `dupskip`(완료된 요청이라 재전송을 건너뛴 횟수) 추가. dupskip이 늘면서 깨짐이 사라지면 이 원인이 맞다.
+- 그래도 깨지면 다음 후보: ST x-cube-n6-camera-capture처럼 USB DMA 사용(`UVC_LIB_USE_DMA`), 캡처 버퍼 tearing.
+
+### 2026-11-13 3차 실행: 사용자 확인 결과 → 4차(USB DMA)
+
+- 3차(완료된 요청은 재전송 안 함): 카메라 앱에서 **아래쪽 깨짐이 더 심해짐**. 그 재전송은 실제로 필요했다 → 3차 추정 틀림, 되돌렸다(ST 원본 동작 + isoinc 카운트만 남김).
+- 결론: 재전송 방식이 아니라 DMA 없는 slave 모드(CPU가 FIFO를 채움)가 isochronous 실시간을 못 따라가는 쪽으로 본다. ST x-cube-n6-camera-capture는 같은 보드에서 `UVC_LIB_USE_DMA`로 USB DMA를 쓴다.
+- 사용자와 상의: H.264로 전송량을 줄이는 것보다 USB 전송부터 고치기로 함(H.264는 패킷 손실이 다음 IDR까지 번짐).
+
+**조치(4차 펌웨어, USB DMA)**
+
+- `usb_otg.c`: `dma_enable = ENABLE`.
+- MPU region 0 비캐시를 0x341F8000(32K) → **0x341F0000(64K)**로 넓힘(`main.c`).
+- 링커: USBX 풀(`.UsbxPoolSection`, 36K, 엔드포인트 전송 버퍼가 모두 여기서 나옴)을 0x341F0000에 고정. hpcd 0x341F9000, `.UsbxAppSection` 0x341FA000, MSP 스택은 맨 끝. 캐시 RAM은 0x341E0000~0x341EFFFF 64K. 겹침은 링커 ASSERT로 막는다.
+- RIMC OTG1(CID1, Sec/Priv)은 원래 설정돼 있음.
+- 빌드 확인은 사용자가 먼저 한다.
+
+### 2026-11-13 4차 실행: 사용자 확인 결과
+
+- 빌드 성공(사용자 확인). **영상 아래쪽 깨짐 없어짐** → 원인은 slave 모드 USB 전송, USB DMA로 해결.
+- 남은 확인: 영상 중 CDC 에코, 카메라 앱 재시작, `UVC:` 줄 isoinc 변화. 태블릿 확인은 나중에.
+
+### 2026-11-13 장치 내부 지연 측정 추가 (Claude)
+
+- `Video/Inc/vtime.h`: CPU 사이클 카운터(DWT->CYCCNT) 시각. `vfq_frame_t`에 `t_cap_start/t_cap_end/t_enc_end` 추가.
+- `video_app.c`: `BSP_CAMERA_VsyncEventCallback`에서 프레임 시작 시각, 프레임 이벤트에서 캡처 완료 시각, 인코딩 직후 인코딩 완료 시각 기록.
+- `ux_device_video.c`: 프레임을 가져온 시각과 **EOF 페이로드의 전송 완료 콜백** 시각(미리 채운 페이로드 수만큼 뒤)을 잰다. 5초마다 `UVC:` 줄 아래에 출력:
+  `LAT ms (avg/max, n N): cap a/m enc a/m wait a/m usb a/m total a/m`
+  - cap = VSYNC → 캡처 완료, enc = 캡처 완료 → 인코딩 완료, wait = 인코딩 완료 → UVC가 가져감, usb = 가져감 → EOF 전송 완료, total = VSYNC → EOF 전송 완료(PRD 장치 내부 지연, 목표 50 ms 이하).
+- 주의: BSP(VENC_USB 판)는 VSYNC 콜백 전에 ISP 통계 수집을 먼저 해서 시작 시각이 약간 늦게 찍힐 수 있다. cap이 33 ms 근처면 VSYNC = 프레임 시작이 맞고, 0에 가까우면 VSYNC가 프레임 끝이라는 뜻이다.
+
+### 2026-11-13 지연 측정 첫 결과 → high-bandwidth isochronous (Claude)
+
+- 첫 `LAT`(카메라 앱 스트리밍): `cap 29.1 enc 14.4 wait 14.9 usb 40.0 total 98.5`(평균 ms), UVC sent 25 fps, isoinc 초당 약 500. VSYNC = 프레임 시작 확인(cap ≈ 29 ms).
+- 사용자: VLC는 끊기며 나오고 카메라 앱은 자연스러움(카메라 앱이 프레임 간격을 부드럽게 맞춤). 근본은 장치가 25 fps만 보내는 것.
+- 원인: 페이로드 1 KB마다 USBX 영상 스레드 전환 + PSRAM 복사 + arm. 초당 약 1700 페이로드가 한계라 68 KB 프레임에 40 ms.
+- 조치: ST x-cube-n6-camera-capture처럼 **1024 B × 3/마이크로프레임**(wMaxPacketSize 0x1400), 페이로드 최대 3072 B. HAL은 ISO IN에서 MULCNT = 패킷 수로 설정한다(`USB_EPStartXfer`).
+  - `UX_SLAVE_REQUEST_DATA_MAX_LENGTH` 3072, USBX 메모리 28K → 44K, UX 풀 36K → 52K(비캐시 0x341F0000~), hpcd 0x341FD000.
+  - FIFO: Rx 0xC0, EP0 0x10, CDC 0x40/0x10, UVC 0x280(합 0x3A0 word).
+  - PRD 5장 USB 표, m3-guide 갱신.
+
+### 2026-11-13 high-bandwidth 결과 → 복사 속도 개선 (Claude)
+
+- 사용자: 빌드 성공, 영상 잘 나옴. VLC 지연 500 ms 이상은 VLC 캐싱 때문(캡처 장치 열기 → 추가 옵션 보기 → 캐싱 0 ms로 줄어듦). 카메라 앱은 지연 거의 없음. **영상 중 CDC 에코 OK, 카메라 앱 재시작 OK.**
+- `LAT`(첫 5초): `cap 29.1 enc 24.5 wait 0.4 usb 29.4 total 83.5`, sent 27.7 fps, isoinc 178. usb가 40 → 29 ms로 줄었지만 페이로드 수는 여전히 초당 약 1700 수준이고, 스트리밍 중 인코딩이 12 → 24 ms로 늘어남.
+- 원인: 페이로드마다 USBX 영상 스레드에서 복사가 두 번 일어난다(우리 `video_write_payload`: PSRAM → 페이로드 버퍼, USBX 쓰기 스레드: 페이로드 버퍼 → 엔드포인트 버퍼). 둘 다 1바이트 루프였다(`ux_utility_memory_copy`, 그리고 링크된 newlib-nano `memcpy`도 1바이트 루프). 비캐시 PSRAM 1바이트 읽기 3000번이 전송 사이 간격을 늘리고 VENC와 PSRAM 버스를 다툰다.
+- 조치:
+  - `Video/Src/fast_copy.c` `fast_memcpy`: 원본 4바이트 정렬 후 워드 8개씩 읽기, 대상 비정렬이면 비정렬 쓰기.
+  - `ux_utility_memory_copy.c`(USBX 코어, `N6UVC 수정` 주석): `fast_memcpy` 호출로 교체.
+  - `ux_device_video.c`: PSRAM 복사를 `fast_memcpy`로, 조각 크기를 4의 배수(3068 B)로 해서 원본 정렬 유지.
+
+### 2026-11-13 복사 개선 결과 (사용자 → Claude)
+
+- 영상 정상. `UVC: sent 30.0 fps`, buferr·getfail 0. isoinc 초당 약 400(재전송으로 처리, 영상 깨짐 없음).
+- `LAT` 평균/최대(ms): **cap 29.1 / enc 12.1~12.2(최대 36) / wait 0.0 / usb 15.4~16.8 / total 56.8~58.2(최대 81)**.
+- 인코딩은 스트리밍 중에도 12 ms로 돌아옴(1바이트 복사가 PSRAM 버스를 막던 것 해소). USB 40 → 16 ms.
+- PRD 장치 내부 목표 50 ms에는 약 7 ms 모자람. 남은 큰 몫은 cap(센서 한 프레임 받기, 29 ms, 구조상 고정)과 usb(16 ms).
+- 더 줄이는 방법(미적용): USBX zero-copy(`UX_DEVICE_ENDPOINT_BUFFER_OWNER=1`) + 페이로드 채우기를 별도 스레드로 + 프레임 슬롯을 캐시 영역으로(읽기 버스트). 1-B H.264는 프레임이 평균 약 17 KB라 usb 구간이 저절로 약 4 ms로 줄어든다.

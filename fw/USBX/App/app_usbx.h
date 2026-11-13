@@ -41,7 +41,7 @@ extern "C" {
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
-#define USBX_MEMORY_STACK_SIZE       (28U * 1024U)
+#define USBX_MEMORY_STACK_SIZE       (44U * 1024U)  /* M3: 엔드포인트 버퍼·영상 페이로드 3 KB씩(+16K) */
 /* USER CODE BEGIN EC */
 
 /* USER CODE END EC */

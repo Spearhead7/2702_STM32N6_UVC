@@ -431,7 +431,8 @@ void MPU_Config(void)
   */
   MPU_InitStruct.Enable = MPU_REGION_ENABLE;
   MPU_InitStruct.Number = MPU_REGION_NUMBER0;
-  MPU_InitStruct.BaseAddress = 0x341F8000;
+  /* M3(USB DMA): 비캐시 32K → 64K. USBX 풀(0x341F0000, USB DMA 버퍼)·hpcd·MSP 스택 (링커 참고) */
+  MPU_InitStruct.BaseAddress = 0x341F0000;
   MPU_InitStruct.LimitAddress = 0x341FFFFF;
   MPU_InitStruct.AttributesIndex = MPU_ATTRIBUTES_NUMBER0;
   MPU_InitStruct.AccessPermission = MPU_REGION_PRIV_RW;

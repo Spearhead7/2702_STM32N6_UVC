@@ -9,7 +9,7 @@ M3 완료 기준(PRD 9장): Windows 카메라 앱과 태블릿 뷰어에서 **12
 | 항목 | 내용 |
 |---|---|
 | 영상 경로 | IMX335 → DCMIPP(ISP 자동 노출·화이트밸런스, 16:9 크롭, 1280×720 축소) → VENC 하드웨어 JPEG → 프레임 큐 → UVC |
-| UVC | MJPEG 1280×720 30fps 한 가지. isochronous 1024 B(약 8 MB/s) |
+| UVC | MJPEG 1280×720 30fps 한 가지. isochronous 1024 B × 3/마이크로프레임(high-bandwidth), USB DMA |
 | CDC | M2와 같은 에코(M5에서 CLI로 바뀜) |
 | 카메라 동작 | USB 연결과 상관없이 부팅하면 바로 카메라·인코더가 돈다. 카메라 앱을 열면 그 순간의 최신 프레임부터 보낸다 |
 | 외부 PSRAM | 32 MB 중 약 14 MB를 영상 버퍼로 쓴다. 부팅 때 간단한 읽기/쓰기 확인을 한다 |

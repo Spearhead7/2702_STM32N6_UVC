@@ -148,7 +148,7 @@ flowchart LR
 | IAD 1 → IF1 | CDC Data | 0x01 Bulk OUT, 0x81 Bulk IN (512 B) | 명령, 응답, 로그 |
 | IAD 2 → IF2 | UVC VideoControl | EP0만 사용 | 카메라 제어 요청, VC header의 baInterfaceNr = 3. 1-A는 bcdUVC = 0x0110, 1-B에서 UVC 1.5를 고르면 0x0150 |
 | IAD 2 → IF3 alt 0 | UVC VideoStreaming | 없음 | 스트림 대기(대역폭 0). 1-A는 MJPEG, 1-B는 H.264 포맷·프레임 디스크립터가 여기 들어간다 |
-| IAD 2 → IF3 alt 1~ | UVC VideoStreaming | 0x83 Isochronous IN | 1024 B × 1(마이크로프레임당, 약 8 MB/s). 1-A MJPEG(100~200 KB/프레임, 3~6 MB/s)도 이 안에 들어가므로 high-bandwidth(×3)는 쓰지 않는다(USB DMA 미사용이라 FIFO 여유가 없음, M3 결정). 1-B H.264는 충분하다 |
+| IAD 2 → IF3 alt 1~ | UVC VideoStreaming | 0x83 Isochronous IN | 1024 B × 3(high-bandwidth, 마이크로프레임당 3 KB, 최대 약 24 MB/s), USB DMA 사용. M3 결정 변경: ×1·DMA 미사용(slave)은 하단 깨짐과 프레임당 전송 약 40 ms(25 fps)로 실패. x-cube-n6-camera-capture와 같은 구성 |
 
 ## 7. CDC CLI 초안
 

@@ -253,7 +253,7 @@
    is 2048 bytes but can be reduced in memory constrained environments. For cd-rom support in the storage
    class, this value cannot be less than 2048.  */
 
-#define UX_SLAVE_REQUEST_DATA_MAX_LENGTH                    1024  /* M3: UVC isochronous MPS 1024 B */
+#define UX_SLAVE_REQUEST_DATA_MAX_LENGTH                    3072  /* M3: UVC HS 1024 B x 3/마이크로프레임 */
 
 /* Defined, this enables processing of Get String Descriptor requests with zero Language ID.
    The first language ID in the language ID framework will be used if the request has a zero

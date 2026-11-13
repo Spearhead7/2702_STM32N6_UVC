@@ -53,7 +53,7 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 ## 펌웨어 구조 (fw/)
 - CubeN6 V1.4.1 `USBPD_SNK_Ux_Device_HID_CDC_ACM`에서 출발(ThreadX + USBX + USBPD). UVC는 `Ux_Device_Video`에서 가져옴.
 - `.ioc` 없음. CubeMX로 다시 생성하지 말고 코드를 직접 고친다.
-- 개발 모드 전용 링커 배치(AXISRAM2, ROM 383K / RAM 128K, 끝 32K는 MPU 비캐시). 플래시 부팅 구조는 M6에서.
+- 개발 모드 전용 링커 배치(AXISRAM2, ROM 383K / RAM 128K, 끝 64K는 MPU 비캐시: USBX 풀(USB DMA 버퍼)·hpcd·MSP 스택). 플래시 부팅 구조는 M6에서.
 - 디버그 로그: printf → USART1(ST-LINK 가상 COM, 115200).
 - 영상: `fw/Video/`(video_app: 카메라·인코딩 스레드와 `MX_DCMIPP_Init` 재정의, jpeg_enc, vframe_queue, video_cfg). 큰 버퍼는 `IN_PSRAM`(링커 `.psram_bss`, 0x90000000, MPU 비캐시). PSRAM은 `main.c`의 `PSRAM_Init()`이 ThreadX 시작 전에 켠다.
 - HSLV OTP 퓨즈는 읽기만 한다(ST 예제 FSBL은 굽지만 되돌릴 수 없으므로 굽지 않는다).

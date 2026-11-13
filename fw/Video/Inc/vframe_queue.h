@@ -36,6 +36,10 @@ typedef struct
   uint32_t      ts_ms;      /* 캡처 완료 시각(HAL tick, ms) */
   vfq_format_t  format;
   uint8_t       key;        /* 키프레임(JPEG는 항상 1) */
+  /* 지연 측정용 시각(vtime_now() 사이클). 0이면 기록 안 됨 */
+  uint32_t      t_cap_start; /* 캡처 시작(DCMIPP VSYNC) */
+  uint32_t      t_cap_end;   /* 캡처 완료(DCMIPP 프레임 이벤트) */
+  uint32_t      t_enc_end;   /* 인코딩 완료(큐에 넣기 직전) */
   /* 내부용 */
   uint8_t       state;
   uint16_t      refcnt;

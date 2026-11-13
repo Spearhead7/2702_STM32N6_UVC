@@ -417,10 +417,17 @@ uint16_t USBD_Get_Configuration_Number(uint8_t class_type, uint8_t interface_typ
 #define USBD_CDCACM_EPINCMD_FS_BINTERVAL              5U
 #define USBD_CDCACM_EPINCMD_HS_BINTERVAL              5U
 
-/* Device VIDEO Class (IF2-3). M3: 1280x720 30fps MJPEG, HS isochronous 1024 B x 1/마이크로프레임(약 8 MB/s). */
+/* Device VIDEO Class (IF2-3). M3: 1280x720 30fps MJPEG.
+   HS high-bandwidth isochronous: 1024 B x 3 패킷/마이크로프레임(최대 약 24 MB/s).
+   x-cube-n6-camera-capture(USBL_PACKET_PER_MICRO_FRAME=3)와 같다. 1 패킷이면 페이로드마다
+   스레드를 거치는 비용 때문에 한 프레임(약 68 KB) 전송에 약 40 ms가 걸려 30 fps를 못 냈다.
+   USBD_VIDEO_EPIN_HS_MPS: 디스크립터 wMaxPacketSize 값(bit 12:11 = 추가 패킷 수).
+   USBD_VIDEO_HS_PAYLOAD_SIZE: 페이로드(한 마이크로프레임 전송) 최대 바이트. */
 #define USBD_VIDEO_EPIN_ADDR                          0x83U
 #define USBD_VIDEO_EPIN_FS_MPS                        300U
-#define USBD_VIDEO_EPIN_HS_MPS                        1024U
+#define USBD_VIDEO_HS_PKT_PER_UFRAME                  3U
+#define USBD_VIDEO_EPIN_HS_MPS                        (1024U | ((USBD_VIDEO_HS_PKT_PER_UFRAME - 1U) << 11))
+#define USBD_VIDEO_HS_PAYLOAD_SIZE                    (1024U * USBD_VIDEO_HS_PKT_PER_UFRAME)
 #define USBD_VIDEO_EPIN_FS_BINTERVAL                  1U
 #define USBD_VIDEO_EPIN_HS_BINTERVAL                  1U
 

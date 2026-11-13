@@ -24,6 +24,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "vframe_queue.h"
+#include "vtime.h"
+#include <stdio.h>
+#include "fast_copy.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -66,6 +69,35 @@ static uint8_t      uvc_fid = 0U;
 /* 통계(디버그용) */
 volatile uint32_t   uvc_frames_sent = 0U;
 volatile uint32_t   uvc_empty_payloads = 0U;
+volatile uint32_t   uvc_payload_get_fail = 0U;
+extern volatile ULONG ux_dcd_stm32_iso_in_incomplete_count;   /* ux_dcd_stm32_callback.c */
+
+/* 지연 측정(PRD 8장: 장치 내부 = 캡처 시작 → USB 전송 완료 50 ms 이하).
+   구간(vtime 사이클 → us):
+     cap   = 캡처 시작(VSYNC) → 캡처 완료
+     enc   = 캡처 완료 → 인코딩 완료(인코더 스레드 대기 + 인코딩)
+     wait  = 인코딩 완료 → UVC가 프레임을 가져감(앞 프레임 전송 대기)
+     usb   = UVC가 가져감 → 마지막(EOF) 페이로드 전송 완료
+     total = 캡처 시작 → 마지막 페이로드 전송 완료
+   페이로드는 미리 채워 두므로(UVC_PREFILL_PAYLOADS) EOF 페이로드 '작성'이 아니라
+   그 페이로드의 '전송 완료' 콜백 시각을 쓴다. */
+#define UVC_LAT_NUM    5U
+static uint32_t uvc_pay_written = 0U;   /* commit한 페이로드 수 */
+static uint32_t uvc_pay_done    = 0U;   /* 전송 완료 콜백 수 */
+static uint32_t uvc_usb_start   = 0U;   /* 지금 보내는 프레임을 가져온 시각 */
+static struct
+{
+  uint8_t  valid;
+  uint32_t idx;                          /* EOF 페이로드 번호(uvc_pay_written 기준) */
+  uint32_t t_cap_start, t_cap_end, t_enc_end, t_usb_start;
+} uvc_lat_pend;
+static struct
+{
+  uint32_t n;
+  uint32_t sum_us[UVC_LAT_NUM];
+  uint32_t max_us[UVC_LAT_NUM];
+} uvc_lat;
+static VOID uvc_lat_on_payload_done(VOID);
 
 /* Video Probe data structure */
 static USBD_VideoControlTypeDef video_Probe_Control =
@@ -218,6 +250,8 @@ VOID USBD_VIDEO_StreamPayloadDone(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
   /* USER CODE BEGIN USBD_VIDEO_StreamPayloadDone */
   UX_PARAMETER_NOT_USED(length);
 
+  uvc_lat_on_payload_done();
+
   /* 페이로드 하나가 나갈 때마다 하나를 채운다(보낼 프레임이 없으면 헤더만) */
   if (uvc_state == UVC_PLAY_STATUS_STREAMING)
   {
@@ -284,7 +318,7 @@ UINT USBD_VIDEO_StreamRequest(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
           else
           {
             video_Probe_Control.dwFrameInterval = (UVC_INTERVAL(UVC_CAM_FPS_HS));
-            video_Probe_Control.dwMaxPayloadTransferSize = USBD_VIDEO_EPIN_HS_MPS;
+            video_Probe_Control.dwMaxPayloadTransferSize = USBD_VIDEO_HS_PAYLOAD_SIZE;
           }
 
           /* Copy data for transfer */
@@ -329,7 +363,7 @@ UINT USBD_VIDEO_StreamRequest(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
           {
             video_Commit_Control.dwFrameInterval = (UVC_INTERVAL(UVC_CAM_FPS_HS));
             /* 예제는 USBD_VIDEO_EPIN_HS_BINTERVAL(=1)을 넣고 있었다. 패킷 크기(MPS)가 맞다. */
-            video_Commit_Control.dwMaxPayloadTransferSize = USBD_VIDEO_EPIN_HS_MPS;
+            video_Commit_Control.dwMaxPayloadTransferSize = USBD_VIDEO_HS_PAYLOAD_SIZE;
           }
 
           /* Copy data for transfer */
@@ -371,7 +405,7 @@ ULONG USBD_VIDEO_StreamGetMaxPayloadBufferSize(VOID)
 
   /* USER CODE BEGIN USBD_VIDEO_StreamGetMaxPayloadBufferSize */
 
-  max_playload = USBD_VIDEO_EPIN_HS_MPS;
+  max_playload = USBD_VIDEO_HS_PAYLOAD_SIZE;
 
   /* USER CODE END USBD_VIDEO_StreamGetMaxPayloadBufferSize */
 
@@ -391,6 +425,9 @@ static VOID video_stream_reset(VOID)
     uvc_frame = UX_NULL;
   }
   uvc_frame_off = 0U;
+  uvc_pay_written = 0U;
+  uvc_pay_done = 0U;
+  uvc_lat_pend.valid = 0U;
 }
 
 /**
@@ -417,10 +454,15 @@ static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
 
   if (ux_device_class_video_write_payload_get(stream, &buffer, &buffer_length) != UX_SUCCESS)
   {
+    uvc_payload_get_fail++;
     return;
   }
 
-  mps = stream->ux_device_class_video_stream_endpoint->ux_slave_endpoint_descriptor.wMaxPacketSize & 0x7FFU;
+  /* 한 페이로드 최대 = 패킷 크기 x 마이크로프레임당 패킷 수(wMaxPacketSize bit 12:11 + 1) */
+  {
+    ULONG wmps = stream->ux_device_class_video_stream_endpoint->ux_slave_endpoint_descriptor.wMaxPacketSize;
+    mps = (wmps & 0x7FFU) * (((wmps >> 11) & 0x3U) + 1U);
+  }
   if (mps > buffer_length)
   {
     mps = buffer_length;
@@ -434,6 +476,7 @@ static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
     {
       uvc_frame_off = 0U;
       uvc_fid ^= UVC_HDR_FID;
+      uvc_usb_start = vtime_now();
     }
   }
 
@@ -442,18 +485,27 @@ static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
   if (uvc_frame != UX_NULL)
   {
     chunk = uvc_frame->size - uvc_frame_off;
-    if (chunk > (mps - UVC_HDR_LEN))
+    /* 조각 크기를 4의 배수로(3068 B) 해서 다음 조각의 원본 주소도 4바이트 정렬로 유지한다 */
+    if (chunk > ((mps - UVC_HDR_LEN) & ~3U))
     {
-      chunk = mps - UVC_HDR_LEN;
+      chunk = (mps - UVC_HDR_LEN) & ~3U;
     }
 
-    ux_utility_memory_copy(buffer + UVC_HDR_LEN, uvc_frame->data + uvc_frame_off, chunk);
+    /* PSRAM(비캐시) → USBX 페이로드 버퍼. 워드 단위 복사(fast_copy.h) */
+    fast_memcpy(buffer + UVC_HDR_LEN, uvc_frame->data + uvc_frame_off, chunk);
     uvc_frame_off += chunk;
 
     if (uvc_frame_off >= uvc_frame->size)
     {
       info |= UVC_HDR_EOF;
       uvc_last_seq = uvc_frame->seq;
+      /* 이 페이로드(EOF)가 전송 완료되면 지연을 기록한다 */
+      uvc_lat_pend.idx         = uvc_pay_written + 1U;
+      uvc_lat_pend.t_cap_start = uvc_frame->t_cap_start;
+      uvc_lat_pend.t_cap_end   = uvc_frame->t_cap_end;
+      uvc_lat_pend.t_enc_end   = uvc_frame->t_enc_end;
+      uvc_lat_pend.t_usb_start = uvc_usb_start;
+      uvc_lat_pend.valid       = 1U;
       vfq_release(uvc_frame);
       uvc_frame = UX_NULL;
       uvc_frames_sent++;
@@ -468,6 +520,112 @@ static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
   buffer[1] = info;
 
   ux_device_class_video_write_payload_commit(stream, UVC_HDR_LEN + chunk);
+  uvc_pay_written++;
+}
+
+/**
+  * @brief  페이로드 전송 완료마다 불린다. 기다리던 EOF 페이로드면 프레임 지연을 누적한다.
+  */
+static VOID uvc_lat_on_payload_done(VOID)
+{
+  uint32_t now;
+  uint32_t us[UVC_LAT_NUM];
+  uint32_t i;
+  UX_INTERRUPT_SAVE_AREA
+
+  uvc_pay_done++;
+  if ((uvc_lat_pend.valid == 0U) || ((int32_t)(uvc_pay_done - uvc_lat_pend.idx) < 0))
+  {
+    return;
+  }
+  uvc_lat_pend.valid = 0U;
+  if ((uvc_lat_pend.t_cap_start == 0U) || (uvc_lat_pend.t_cap_end == 0U))
+  {
+    return;   /* 캡처 시각이 기록되지 않은 프레임 */
+  }
+
+  now   = vtime_now();
+  us[0] = vtime_us(uvc_lat_pend.t_cap_end   - uvc_lat_pend.t_cap_start);
+  us[1] = vtime_us(uvc_lat_pend.t_enc_end   - uvc_lat_pend.t_cap_end);
+  us[2] = vtime_us(uvc_lat_pend.t_usb_start - uvc_lat_pend.t_enc_end);
+  us[3] = vtime_us(now                      - uvc_lat_pend.t_usb_start);
+  us[4] = vtime_us(now                      - uvc_lat_pend.t_cap_start);
+
+  UX_DISABLE
+  uvc_lat.n++;
+  for (i = 0U; i < UVC_LAT_NUM; i++)
+  {
+    uvc_lat.sum_us[i] += us[i];
+    if (us[i] > uvc_lat.max_us[i])
+    {
+      uvc_lat.max_us[i] = us[i];
+    }
+  }
+  UX_RESTORE
+}
+
+/**
+  * @brief  video_app이 5초마다 부르는 통계 훅(video_app.c의 약한 정의를 덮어쓴다).
+  *         sent: 호스트로 다 보낸 프레임 수/초, isoinc: USB가 제때 못 보낸 패킷 누적,
+  *         buferr: USBX 페이로드 버퍼 부족 누적, getfail: 페이로드 버퍼 얻기 실패 누적.
+  */
+void video_stats_hook(uint32_t period_ms)
+{
+  static uint32_t prev_sent = 0U;
+  uint32_t sent = uvc_frames_sent;
+  uint32_t d = sent - prev_sent;
+  ULONG buferr = 0U;
+
+  prev_sent = sent;
+  if (stream_write != UX_NULL)
+  {
+    buferr = stream_write->ux_device_class_video_stream_buffer_error_count;
+  }
+  if (period_ms == 0U)
+  {
+    period_ms = 1U;
+  }
+
+  printf("UVC: %s, sent %lu.%lu fps, empty %lu, isoinc %lu, buferr %lu, getfail %lu\r\n",
+         (uvc_state == UVC_PLAY_STATUS_STREAMING) ? "streaming" : "stopped",
+         (unsigned long)(d * 1000U / period_ms), (unsigned long)((d * 10000U / period_ms) % 10U),
+         (unsigned long)uvc_empty_payloads, (unsigned long)ux_dcd_stm32_iso_in_incomplete_count,
+         (unsigned long)buferr, (unsigned long)uvc_payload_get_fail);
+
+  /* 지연(5초 평균/최대, ms 소수 첫째 자리). 출력 후 누적값을 비운다. */
+  {
+    static const char *const name[UVC_LAT_NUM] = { "cap", "enc", "wait", "usb", "total" };
+    uint32_t n;
+    uint32_t sum[UVC_LAT_NUM];
+    uint32_t max[UVC_LAT_NUM];
+    uint32_t i;
+    UX_INTERRUPT_SAVE_AREA
+
+    UX_DISABLE
+    n = uvc_lat.n;
+    for (i = 0U; i < UVC_LAT_NUM; i++)
+    {
+      sum[i] = uvc_lat.sum_us[i];
+      max[i] = uvc_lat.max_us[i];
+      uvc_lat.sum_us[i] = 0U;
+      uvc_lat.max_us[i] = 0U;
+    }
+    uvc_lat.n = 0U;
+    UX_RESTORE
+
+    if (n > 0U)
+    {
+      printf("LAT ms (avg/max, n %lu):", (unsigned long)n);
+      for (i = 0U; i < UVC_LAT_NUM; i++)
+      {
+        uint32_t avg = sum[i] / n;
+        printf(" %s %lu.%lu/%lu.%lu", name[i],
+               (unsigned long)(avg / 1000U), (unsigned long)((avg / 100U) % 10U),
+               (unsigned long)(max[i] / 1000U), (unsigned long)((max[i] / 100U) % 10U));
+      }
+      printf("\r\n");
+    }
+  }
 }
 
 /* USER CODE END 1 */
