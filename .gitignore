@@ -1,0 +1,32 @@
+# STM32CubeIDE build output
+Debug/
+Release/
+**/Debug/
+**/Release/
+*.o
+*.d
+*.su
+*.cyclo
+*.elf
+*.map
+*.list
+*.hex
+*.bin
+!Binary/**/*.hex
+!Binary/**/*.bin
+
+# Signed images produced by post-build steps
+*-trusted.bin
+*_signed.bin
+
+# IDE / tool state
+.metadata/
+.settings/language.settings.xml
+*.launch.bak
+.vscode/
+*.tmp
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
