@@ -215,7 +215,7 @@ ST가 공개한 예제 세 개를 합치는 방식으로 개발한다. 처음부
 - [Introduction to Hardware Video Encoding with STM32 (ST 위키)](https://wiki.st.com/stm32mcu/wiki/Introduction_to_Hardware_Video_Encoding_with_STM32): VENC 구조, 메모리 요구량, 성능.
 - [x-cube-n6-camera-capture](https://github.com/STMicroelectronics/x-cube-n6-camera-capture): IMX335 → ISP → USB UVC 흐름. 카메라·ISP 코드를 가져온다.
 - [STM32CubeN6 Ux_Device_Video](https://github.com/STMicroelectronics/STM32CubeN6/tree/main/Projects/STM32N6570-DK/Applications/USBX/Ux_Device_Video): 카메라 없이 MJPEG 스트림을 보내는 USBX UVC 예제. 1-A의 출발점이다.
-- STM32CubeN6 Ux_Device_CDC_ACM: USBX CDC 예제.
+- STM32CubeN6 USBPD_SNK_Ux_Device_HID_CDC_ACM: DK용 USBX CDC 예제(HID+CDC IAD composite). `Ux_Device_CDC_ACM`은 NUCLEO-N657X0-Q용만 있다(V1.4.1 기준).
 - [How to implement the USB device composite class (ST 커뮤니티)](https://community.st.com/t5/stm32-mcus/how-to-implement-the-usb-device-composite-class-in-stm32-using/ta-p/645017): USBX composite 구성 방법.
 - [CDC+UVC composite 인식 실패 사례 (ST 커뮤니티)](https://stcommunity.st.com/t5/stm32-mcus-embedded-software/stm32n6-usbd-composite-cdc-uvc-failed-to-enumerate-under-windows/td-p/887985): VC/VS 인터페이스 번호가 고정되어 생기는 문제와 해결책.
 
@@ -224,7 +224,7 @@ ST가 공개한 예제 세 개를 합치는 방식으로 개발한다. 처음부
 다섯 단계를 순서대로 진행하고, 각 단계의 완료 기준을 통과해야 다음 단계로 넘어간다. 일정은 아직 정하지 않았다(10장).
 
 1. **M1 환경 구축과 예제 확인 (Windows PC)**
-    - 작업: Ux_Device_Video(MJPEG), x-cube-n6-camera-capture, Ux_Device_CDC_ACM을 각각 빌드하고 굽는다.
+    - 작업: Ux_Device_Video(MJPEG), x-cube-n6-camera-capture, USBPD_SNK_Ux_Device_HID_CDC_ACM(DK용 CDC 예제)을 각각 빌드하고 굽는다. 절차는 `docs/m1-guide.md`.
     - 완료 기준: 세 예제가 Windows PC에서 동작하고, 태블릿 뷰어에서도 MJPEG 예제 영상이 나오는지 확인한다.
 2. **M2 composite 인식(MJPEG 가짜 영상)**
     - 작업: CDC + UVC composite 디스크립터를 만들고, UVC는 고정 MJPEG 이미지를 보낸다.

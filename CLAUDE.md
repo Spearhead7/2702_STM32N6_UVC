@@ -29,10 +29,20 @@
 - DCMIPP의 나머지 파이프(AI용, 화면용)와 PSRAM 영역은 비워 둔다.
 
 ## 참고 예제
-- STM32CubeN6: `Projects/STM32N6570-DK/Applications/USBX/Ux_Device_Video`(MJPEG UVC), `Ux_Device_CDC_ACM`, `VENC/VENC_USB`
+- 로컬 사본은 저장소 밖 `D:\JOB2027\2702_STM32N6_UVC\ref\`에 있다(`STM32Cube_FW_N6_V1.4.1\` 일부, `x-cube-n6-camera-capture\` v2.0.1). 내용은 `docs/progress.md` M1 참고.
+- STM32CubeN6: `Projects/STM32N6570-DK/Applications/USBX/Ux_Device_Video`(MJPEG UVC), `USBPD/USBPD_SNK_Ux_Device_HID_CDC_ACM`(DK용 CDC, HID+CDC IAD composite. `Ux_Device_CDC_ACM`은 NUCLEO용만 있음), `VENC/VENC_USB`
 - https://github.com/STMicroelectronics/x-cube-n6-camera-capture (IMX335 → ISP → UVC)
 - https://github.com/STMicroelectronics/x-cube-n6-ai-h264-usb-uvc (VENC H.264 → UVC, AI 부분 제외)
 
+## 빌드 (Claude가 직접 확인할 때)
+CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import`에는 `.cproject`가 있는 하위 프로젝트 폴더를 준다.
+
+```powershell
+& "C:\ST\STM32CubeIDE_1.18.0\STM32CubeIDE\stm32cubeidec.exe" --launcher.suppressErrors -nosplash -application org.eclipse.cdt.managedbuilder.core.headlessbuild -data <임시 워크스페이스> -import <프로젝트 폴더> -build all
+```
+
+서명: `STM32_SigningTool_CLI.exe -bin <app>.bin -nk -of 0x80000000 -t fsbl -o <app>-trusted.bin -hv 2.3 -align` (CubeProgrammer 2.21 이상은 `-align` 필요). 굽기는 사용자가 한다.
+
 ## 현재 상태
 - PRD 확정, 펌웨어 코드는 아직 없음.
-- **다음 할 일: M1** — Windows PC에서 Ux_Device_Video(MJPEG), x-cube-n6-camera-capture, Ux_Device_CDC_ACM을 각각 빌드·실행하고, 태블릿 뷰어에서 MJPEG 예제 영상이 나오는지 확인한다. 보드 리비전(MB1939-…)도 이때 확인해 PRD에 적는다.
+- **M1 진행 중**: 예제 준비·빌드·서명 완료, 사용자가 `docs/m1-guide.md`에 따라 보드에서 확인할 차례. 결과를 받으면 `docs/progress.md`와 PRD 10장(보드 리비전, 태블릿 앱)에 반영한다.
