@@ -10,7 +10,8 @@ AHD 카메라 1채널을 받아 **녹화(SD, OSD 없음) + AI 추론 + AHD 출�
 ## 2. 블록도
 
 ```mermaid
-flowchart LR
+%%{init: {"flowchart": {"rankSpacing": 70, "nodeSpacing": 40}}}%%
+flowchart TB
     subgraph IN[입력]
         CAM[AHD 카메라] --> DEC["TP2850 / TP2860<br/>AHD 디코더<br/>1080p30 또는 720p30<br/>YUV422"]
     end
