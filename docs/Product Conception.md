@@ -14,7 +14,7 @@ AHD 카메라 1채널을 받아 **녹화(SD, OSD 없음) + AI 추론 + AHD 출�
 flowchart TB
     subgraph IN[입력]
         CAM[AHD 카메라] --> DEC["TP2850<br/>AHD 디코더<br/>1080p30 또는 720p30"]
-        DEC -- "MIPI CSI-2 2레인<br/>YUV422 8비트 (DT 0x1E)" --> CSI["N6 CSI-2 호스트<br/>(D-PHY, 레인당 최대 2.5 Gbps)"]
+        DEC -- "MIPI CSI-2 2레인<br/>(패킷 데이터 형식은 H-1 확인)" --> CSI["N6 CSI-2 호스트<br/>(D-PHY, 레인당 최대 2.5 Gbps)"]
     end
 
     CSI --> P0["DCMIPP Pipe0 (dump)<br/>입력 그대로 YUV422<br/>30fps, PSRAM 전체 프레임"]
@@ -158,10 +158,10 @@ CubeN6 V1.4.1 HAL과 장치 헤더(`stm32n657xx.h`)로 확인한 것이다. 레�
 
 | 항목 | 확인 내용 | 판단 |
 | --- | --- | --- |
-| 레인·속도 | N6 CSI-2 호스트는 데이터 레인 1~2개, D-PHY 레인당 80~2500 Mbps (`DCMIPP_CSI_TWO_DATA_LANES`, `DCMIPP_CSI_PHY_BT_2500`) | 1080p30 YUV422 8비트는 AHD 타이밍(2200×1125) 기준 약 1.19 Gbps → 2레인이면 레인당 약 600 Mbps로 여유 있음. **TP2850을 2레인으로 설정**해야 한다(4레인은 N6가 받지 못함) |
-| 데이터 형식 | `DCMIPP_DT_YUV422_8`(0x1E) 지원 | TP2850 출력과 맞음 |
+| 레인·속도 | N6 CSI-2 호스트는 데이터 레인 1~2개, D-PHY 레인당 80~2500 Mbps (`DCMIPP_CSI_TWO_DATA_LANES`, `DCMIPP_CSI_PHY_BT_2500`) | 1080p30을 화소당 16비트로 보내면 AHD 타이밍(2200×1125) 기준 약 1.19 Gbps → 2레인이면 레인당 약 600 Mbps로 여유 있음. **TP2850을 2레인으로 설정**해야 한다(4레인은 N6가 받지 못함) |
+| 패킷 데이터 형식 | TP2850 출력은 MIPI CSI-2뿐이다(병렬 YUV 출력 없음, 사용자 확인). CSI-2 패킷 안의 화소 형식(데이터 타입)이 무엇인지는 데이터시트로 확인한다. DCMIPP는 YUV422 8비트(0x1E), RGB888(0x24), RAW 등을 받는다 | AHD 디코더는 보통 CSI-2 안에 YUV422 8비트를 싣는다. 그렇다면 그대로 받으면 되고, 다르면 파이프 설정(5.3)을 다시 본다 (H-1) |
 | 파이프 공유 | 파이프마다 데이터 형식(`P0FSCR`/`P1FSCR`/`P2FSCR`)과 가상 채널(`HAL_DCMIPP_CSI_PIPE_Start`)을 따로 고른다. Pipe2는 기본으로 Pipe1의 데이터를 함께 받는다(`HAL_DCMIPP_PIPE_CSI_EnableShare`) | Pipe0·Pipe1이 같은 가상 채널·YUV422를 고르면 셋 다 같은 입력을 받는 구조로 보인다. 동시 수신은 매뉴얼로 최종 확인(H-7) |
-| Pipe0 출력 | dump 파이프라 형식 변환이 없다 | 받은 YUV422(보통 UYVY 순서) 그대로 저장. LTDC 레이어는 YUV 순서를 설정할 수 있어(`LTDC_YUV_ORDER`) 맞출 수 있음 |
+| Pipe0 출력 | dump 파이프라 형식 변환이 없다 | CSI-2로 받은 화소를 그대로 저장(YUV422라면 보통 UYVY 순서). LTDC 레이어는 YUV 순서를 설정할 수 있어(`LTDC_YUV_ORDER`) 맞출 수 있음 |
 | Pipe1/Pipe2의 YUV 입력 | ISP의 Bayer 처리는 쓰지 않는다. YUV422 입력을 NV12(Pipe1)·RGB(Pipe2)로 바꾸는 경로는 매뉴얼로 확인(H-9) | 지금 IMX335(RAW)와 설정이 달라지는 부분 |
 
 그 밖에:
@@ -193,7 +193,7 @@ CubeN6 V1.4.1 HAL과 장치 헤더(`stm32n657xx.h`)로 확인한 것이다. 레�
 
 | 번호 | 항목 | 왜 |
 | --- | --- | --- |
-| H-1 | ~~입력 인터페이스~~ 결정(2026-11-14): TP2850 MIPI CSI-2. TP2850을 2레인·YUV422 8비트로 설정할 수 있는지 데이터시트로 확인 | N6 CSI-2는 최대 2레인 (5.5) |
+| H-1 | ~~입력 인터페이스~~ 결정(2026-11-14): TP2850 MIPI CSI-2. TP2850을 2레인으로 설정할 수 있는지, CSI-2 패킷의 데이터 타입(YUV422 8비트 0x1E인지)을 데이터시트로 확인 | N6 CSI-2는 최대 2레인 (5.5) |
 | H-2 | TP2912가 별도 HS/VS/DE 동기의 16비트 YUV422(Y·C 분리 버스)를 받는 모드, Cb/Cr 순서 | LTDC YUV 출력은 RM으로 확인됨(5.4). LTDC는 내장 동기 코드를 만들지 않는다 |
 | H-3 | LTDC 픽셀 클럭 74.25 MHz(1080p30/720p60 타이밍) 가능 여부 | AHD 출력 타이밍 |
 | H-4 | DK 카메라 커넥터에 맞는 TP2850 어댑터 보드(CSI-2 2레인, I2C, 전원·리셋 핀) | 개발 보드 시험 |
