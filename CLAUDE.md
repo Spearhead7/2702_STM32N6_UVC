@@ -1,12 +1,12 @@
 # STM32N6 UVC — Claude Code 작업 안내
 
-이 저장소는 STM32N6570-DK로 만드는 1CH DVR의 **1단계: USB UVC 카메라 + USB CDC(CLI)** 펌웨어다.
-요구사항 전체는 `docs/prd.md`에 있다. 작업 전에 반드시 읽고, 결정이 바뀌면 PRD도 함께 고친다.
+이 저장소는 STM32N6로 만드는 1CH AI DVR 펌웨어다. 지금은 STM32N6570-DK에서 **1단계: USB UVC 카메라 + USB CDC(CLI)** 를 마무리하는 중이다.
+제품 방향(2026-11-14 변경)은 `docs/Product Conception.md`, 요구사항·로드맵은 `docs/prd.md`(1장 로드맵, 2~10장 1단계, 11장 2단계 이후)에 있다. 작업 전에 반드시 읽고, 결정이 바뀌면 PRD도 함께 고친다.
 
 ## 작업 방식
 - 사용자와는 **한국어**로 대화한다. 사용자는 Linux를 모르므로 **Windows 기준**으로 안내한다.
 - 개발 도구: STM32CubeIDE(+ STM32CubeMX), STM32CubeProgrammer, Tera Term, Windows 카메라 앱·VLC.
-- 마일스톤(M1~M6) 단위로 진행하고, 각 마일스톤의 완료 기준(PRD 9장)을 사용자와 확인한 뒤 다음으로 넘어간다.
+- 단계(PRD 1.3)와 마일스톤 단위로 진행하고, 각 완료 기준을 사용자와 확인한 뒤 다음으로 넘어간다.
 - 보드에 굽기, 실물 확인(영상이 나오는지, 장치 관리자 인식 등)은 사용자가 해야 하는 단계다. 무엇을 보고 알려 달라고 할지 구체적으로 요청한다.
 - ST 패키지(STM32CubeN6, x-cube-n6-*)는 저장소에 복사하지 않는다. 필요한 소스만 가져오고, 출처와 버전을 커밋 메시지나 README에 적는다.
 - 빌드 산출물(Debug/, Release/ 등)은 커밋하지 않는다(.gitignore 참고).
@@ -15,18 +15,26 @@
 - 영상: 1280×720 30fps. **1-A MJPEG로 먼저 영상 확인 → 1-B H.264로 전환·확정**. H.264가 태블릿에서 확인되면 MJPEG 디스크립터·코드·CLI 명령은 영구 삭제. 삭제 전 MJPEG 동작 코드는 git 태그 `m3-mjpeg-ref`(커밋 b7444ea)로 보존되어 있다(참고용).
 - 인코딩: N6 하드웨어 인코더 VENC. H.264는 I/P만(B-프레임 없음), CBR 4 Mbps, IDR 1초 주기, 스트림 시작 시 SPS/PPS + IDR 먼저.
 - USB: USB OTG HS 하나에 CDC-ACM(IF0-1) + UVC(IF2-3) composite, IAD 사용. 예제 UVC 디스크립터의 VC/VS 인터페이스 번호 하드코딩(0/1)을 composite 번호로 고쳐야 한다.
-- CDC: Tera Term용 대화형 CLI. 프롬프트 `n6uvc> `, 에코, `help`, 마지막 줄은 항상 `OK` 또는 `ERROR: <이유>`. 명령 목록은 PRD 7장.
+- CDC: 1단계는 Tera Term용 대화형 CLI(프롬프트 `n6uvc> `, 마지막 줄 `OK`/`ERROR: <이유>`, PRD 7장). **2단계에서 CLI를 UART로 옮기고, 4단계부터 CDC는 UVC_Viewer 바이너리 프로토콜 전용**(저장소 밖 `2701_UVC_VIEWER/UVC_Viewer/docs/protocol.md`).
 - 지연: 전체 100 ms 이하, 장치 내부(캡처 시작 → USB 전송 완료) 50 ms 이하.
 - 실행: 개발 중에는 개발 모드(디버거로 내부 SRAM에 올려 실행). 플래시 부팅(FSBL + 앱을 SRAM으로 복사)은 M6에서.
 - 큰 버퍼(프레임, VENC 참조 프레임)는 외부 PSRAM. 내부 SRAM은 코드·스택·USB·라인 버퍼용.
 - 호스트: 개발은 Windows PC, 각 단계 최종 확인은 Android 태블릿의 UVC 뷰어 앱.
 
-## 2단계 이후를 위한 설계 제약 (지금부터 지킨다)
-- 카메라·ISP·인코더를 UVC에 묶지 않는다. 인코더 출력은 프레임 큐로 내보내고 UVC는 소비자 중 하나(2단계에서 SD 녹화가 추가됨).
-- 해상도·fps는 설정값으로 둔다(2단계 녹화는 1080p15).
-- 녹화는 BBox 없는 원본. 표시 경로와 녹화 경로를 분리할 수 있게 둔다.
-- CLI 명령 처리와 '설정 항목 테이블'을 분리한다(4단계 마우스 메뉴가 같은 테이블을 쓴다).
-- DCMIPP의 나머지 파이프(AI용, 화면용)와 PSRAM 영역은 비워 둔다.
+## 제품 방향 (2026-11-14, 자세한 내용은 docs/Product Conception.md)
+- 단일 펌웨어: 녹화(SD, OSD 없음) + AI + 화면(OSD 포함)은 항상, 태블릿 앱이 영상을 열면 UVC를 더한다. UVC/LCD 제품으로 나누지 않는다.
+- DK 보드: 입력 IMX335, 출력 DK LCD. 커스텀 보드(나중): 입력 TP2850(MIPI CSI-2), 출력 LTDC YUV422 → TP2912(AHD).
+- 해상도는 입력을 따른다. 1080p 입력: AHD 1080p30, 녹화 LCD 모드 1080p15 / UVC 모드 720p30(녹화와 UVC는 같은 스트림).
+- USB1: 태블릿이면 장치(UVC + CDC), 마우스면 호스트(HID, 설정 모드). 커스텀 보드는 DRP + Try.SRC + DR_Swap으로 태블릿 충전.
+- 진행 순서(PRD 1.3): 1단계 M6 플래시 부팅 → UVC_Viewer H.264 표시 + 노트20 확인(별도 저장소) → 2 SD 녹화 + UART CLI → 3 화면·OSD·마우스 → 4 태블릿 프로토콜 → 5 AI(마지막) → 6 커스텀 보드.
+
+## 설계 제약 (지금부터 지킨다, PRD 1.4)
+- 카메라·인코더를 UVC에 묶지 않는다. 인코더 출력은 프레임 큐, SD 녹화와 UVC는 소비자(느린 SD가 UVC를 막지 않게).
+- 해상도·fps는 설정값이고 실행 중에 바뀐다(입력 해상도, UVC/LCD 모드).
+- 녹화는 OSD 없는 원본. OSD는 LTDC 레이어 2에만, 인코더 입력에는 절대 그리지 않는다.
+- DCMIPP 파이프 역할: 인코딩 Pipe1(줄 버퍼 핸드셰이크), AI Pipe2, 화면은 커스텀 보드 Pipe0 / DK Pipe2.
+- 설정 항목 테이블을 CLI·프로토콜·GUI가 함께 쓴다. 명령 처리와 테이블을 분리한다.
+- 보드마다 다른 부분(영상 입력, 화면, AI 입력, USB-C 전원 역할)은 한 계층 뒤에 둔다.
 
 ## 참고 예제
 - 로컬 사본은 저장소 밖 `D:\JOB2027\2702_STM32N6_UVC\ref\`에 있다(`STM32Cube_FW_N6_V1.4.1\` 일부, `x-cube-n6-camera-capture\` v2.0.1). 내용은 `docs/progress.md` M1 참고.
