@@ -50,6 +50,8 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 - **M3 완료**(2026-11-13): IMX335 → DCMIPP/ISP → VENC JPEG → 프레임 큐 → UVC 1280×720 30fps가 Windows 카메라 앱·VLC에서 동작(USB DMA, HS 1024 B×3). 영상 중 CDC 에코·앱 재시작 OK. 장치 내부 지연 평균 약 57 ms(목표 50 ms)는 1-B H.264(M4)에서 다시 확인하기로 함. 태블릿 확인은 나중에. 참고 코드 태그 `m3-mjpeg-ref`. 5초마다 USART1에 `VIDEO:`/`UVC:`/`LAT` 통계.
 - **M4 계획**(2026-11-13): `docs/m4-plan.md`(M4-1 참고 코드 확보 → M4-2 H.264 인코더 → M4-3 frame-based UVC → M4-4 UVC 1.5 → M4-5 태블릿 → M4-6 지연·화질 → M4-7 확정·MJPEG 삭제).
 - **M4 진행**(2026-11-13): M4-2 H.264 인코더(VideoEncoder h264 소스, Debug에서도 이 폴더만 -Os), M4-3 UVC에 MJPEG(형식 1) + H.264 frame-based(형식 2), Commit 형식으로 인코더 전환, M4-5 갤럭시 노트20(Android 13) + ShenYao USB Camera 12.3.2에서 MJPEG·H.264 모두 재생 → M4-4(UVC 1.5)는 생략. H.264 장치 내부 지연 평균 약 51 ms / 최대 약 68 ms(IDR). 다음은 M4-6 지연·화질. Windows 카메라 앱은 MJPEG를 고르므로 H.264 확인은 ffmpeg `-vcodec h264 ... -c copy -copyinkf`로 녹화.
+- **M4-6/M4-7**(2026-11-13): 1차(HCLK 200 MHz, UVC zero-copy·채우기 스레드)로 USB 구간 해결, 장치 내부 평균 49 ms / 최대 52 ms. 2차로 DCMIPP–VENC 하드웨어 핸드셰이크(NV12 64줄 줄 버퍼, AXISRAM2 아래쪽 `.linebuf_bss`)와 MJPEG 영구 삭제(UVC 형식은 H.264 frame-based 하나). 보드에서 장치 내부 평균 27.6 ms / 최대 31 ms 확인.
+- **노트20 연결 수정**(2026-11-14): PD 스택의 Error Recovery 요청은 무시(`usbpd_dpm_user.c`, 보드는 PD 계약 불필요), CC detach로 USB를 끄지 않음, `VDD_VALUE` 1800(ADC 기준 1.8 V, VBUS 측정용), 카메라 초기화 최대 3회 재시도. 실행 후 연결·연결한 채 실행·다시 꽂기 모두 영상 확인. 자세한 내용은 `docs/progress.md`.
 - HardFault 시 원인 레지스터·PC·스레드 이름이 USART1로 출력된다. PC는 `arm-none-eabi-addr2line -f -e fw/Debug/STM32N6_UVC.elf <PC>`로 찾는다. Debug(-O0)는 스택을 많이 쓰니 스레드 스택은 넉넉히 잡는다.
 
 ## 펌웨어 구조 (fw/)
@@ -57,5 +59,5 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 - `.ioc` 없음. CubeMX로 다시 생성하지 말고 코드를 직접 고친다.
 - 개발 모드 전용 링커 배치(AXISRAM2, ROM 383K / RAM 128K, 끝 64K는 MPU 비캐시: USBX 풀(USB DMA 버퍼)·hpcd·MSP 스택). 플래시 부팅 구조는 M6에서.
 - 디버그 로그: printf → USART1(ST-LINK 가상 COM, 115200).
-- 영상: `fw/Video/`(video_app: 카메라·인코딩 스레드와 `MX_DCMIPP_Init` 재정의, jpeg_enc, vframe_queue, video_cfg). 큰 버퍼는 `IN_PSRAM`(링커 `.psram_bss`, 0x90000000, MPU 비캐시). PSRAM은 `main.c`의 `PSRAM_Init()`이 ThreadX 시작 전에 켠다.
+- 영상: `fw/Video/`(video_app: 카메라·인코딩·ISP 스레드와 `MX_DCMIPP_Init` 재정의, h264_enc, vframe_queue, video_cfg). 큰 버퍼는 `IN_PSRAM`(링커 `.psram_bss`, 0x90000000, MPU 비캐시). PSRAM은 `main.c`의 `PSRAM_Init()`이 ThreadX 시작 전에 켠다.
 - HSLV OTP 퓨즈는 읽기만 한다(ST 예제 FSBL은 굽지만 되돌릴 수 없으므로 굽지 않는다).

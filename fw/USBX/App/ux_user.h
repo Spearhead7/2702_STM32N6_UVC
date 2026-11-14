@@ -200,14 +200,17 @@
 /* Defined, this value represents the maximum number of bytes received on a control endpoint in
    the device stack. The default is 256 bytes but can be reduced in memory constrained environments.  */
 
-/* 구성 디스크립터 전체(CDC + UVC MJPEG/H.264 = 273 B)가 한 번에 나가야 한다. 기본 256은 부족(M4-3). */
+/* 구성 디스크립터 전체가 한 번에 나가야 한다. MJPEG+H.264 때 273 B로 기본 256을 넘었다(M4-3).
+   M4-7에서 MJPEG를 지워 226 B지만 여유로 그대로 둔다. */
 #define UX_SLAVE_REQUEST_CONTROL_MAX_LENGTH              512
 
 /* Defined, this value represents the endpoint buffer owner.
    0 - The default, endpoint buffer is managed by core stack. Each endpoint takes UX_SLAVE_REQUEST_DATA_MAX_LENGTH bytes.
    1 - Endpoint buffer managed by classes. In this case not all endpoints consume UX_SLAVE_REQUEST_DATA_MAX_LENGTH bytes.  */
 
-/* #define UX_DEVICE_ENDPOINT_BUFFER_OWNER      0 */
+/* M4-6: 1 = 클래스가 엔드포인트 버퍼를 관리. UVC는 페이로드 버퍼를 그대로 DMA로 보낸다(3 KB 복사 제거).
+   CDC-ACM은 자기 버퍼를 따로 잡는다. */
+#define UX_DEVICE_ENDPOINT_BUFFER_OWNER      1
 
 /* Defined, it enables device CDC ACM zero copy for bulk in/out endpoints (write/read).
    Enabled, the endpoint buffer is not allocated in class, application must provide the buffer for read/write,

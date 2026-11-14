@@ -68,14 +68,14 @@ P0은 PoC에 반드시 들어가야 하는 기능이고, P1은 있으면 좋은 
 | ID | 영역 | 요구사항 | 우선순위 |
 | --- | --- | --- | --- |
 | F-01 | USB | 하나의 USB OTG HS 포트에서 CDC-ACM(인터페이스 2개)과 UVC(VC/VS 인터페이스 2개)를 IAD로 묶은 composite 장치로 인식된다 | P0 |
-| F-02 | UVC (1-A) | UVC 1.1 MJPEG 포맷 디스크립터로 1280×720 30fps를 제공한다. Windows 카메라 앱과 태블릿 뷰어에서 별도 설정 없이 재생되어야 한다. 1-B(H.264)가 성공하면 MJPEG 디스크립터·코드·CLI 명령을 영구 삭제한다(삭제 전 코드는 git 태그 `m3-mjpeg-ref`로 보존) | P0 |
-| F-03 | UVC (1-B) | H.264 포맷 디스크립터로 1280×720 30fps를 제공한다. 페이로드 방식(UVC 1.5 H.264, UVC 1.1 frame-based H.264, MPEG-2 TS)은 M4에서 Windows와 태블릿 호환성 시험 후 확정한다 | P0 |
+| F-02 | UVC (1-A) | UVC 1.1 MJPEG 포맷 디스크립터로 1280×720 30fps를 제공한다. Windows 카메라 앱과 태블릿 뷰어에서 별도 설정 없이 재생되어야 한다. 1-B(H.264)가 성공하면 MJPEG 디스크립터·코드·CLI 명령을 영구 삭제한다(삭제 전 코드는 git 태그 `m3-mjpeg-ref`로 보존). **2026-11-13 M4-7에서 삭제 완료** | P0 |
+| F-03 | UVC (1-B) | H.264 포맷 디스크립터로 1280×720 30fps를 제공한다. 페이로드 방식(UVC 1.5 H.264, UVC 1.1 frame-based H.264, MPEG-2 TS)은 M4에서 Windows와 태블릿 호환성 시험 후 확정한다. **확정(M4-5): UVC 1.1 frame-based H.264**(형식 1개, GUID `H264`). 노트20 뷰어와 Windows ffmpeg에서 재생 확인 | P0 |
 | F-04 | UVC | 호스트의 Probe/Commit 요청에 응답하고, 스트림을 열고 닫을 때 카메라와 인코더를 시작/정지한다. H.264는 스트림 시작 시 SPS/PPS와 IDR 프레임부터 보낸다 | P0 |
 | F-05 | UVC | 밝기, 대비, 화이트밸런스 등 UVC 표준 Processing Unit 컨트롤을 지원한다 | P2 |
 | F-06 | 카메라 | IMX335를 MIPI CSI-2로 받아 DCMIPP와 ISP를 거쳐 1280×720 YUV를 만든다(센서 출력에서 크롭 또는 다운스케일) | P0 |
 | F-07 | 카메라 | 자동 노출(AE)과 자동 화이트밸런스(AWB)가 동작한다 | P0 |
-| F-08 | 인코딩 (1-A) | 하드웨어로 MJPEG를 만든다(VENC JPEG 모드). 품질(Q) 값을 바꿀 수 있다 | P0 |
-| F-09 | 인코딩 (1-B) | VENC로 H.264를 만든다. Baseline 또는 Main profile, Level 3.1, B-프레임 없음(I/P만), 기본 CBR 4 Mbps, IDR 주기 기본 30프레임(1초), 명령 시 즉시 IDR. 저지연 설정: lookahead 없음, 작은 비트레이트 버퍼, 인코딩이 끝난 프레임은 즉시 전송, 가능하면 DCMIPP–VENC 하드웨어 핸드셰이크(프레임이 다 들어오기 전에 인코딩 시작) | P0 |
+| F-08 | 인코딩 (1-A) | ~~하드웨어로 MJPEG를 만든다(VENC JPEG 모드). 품질(Q) 값을 바꿀 수 있다~~ → M4-7에서 삭제 | — |
+| F-09 | 인코딩 (1-B) | VENC로 H.264를 만든다. Baseline 또는 Main profile, Level 3.1, B-프레임 없음(I/P만), 기본 CBR 4 Mbps, IDR 주기 기본 30프레임(1초), 명령 시 즉시 IDR. 저지연 설정: lookahead 없음, 작은 비트레이트 버퍼, 인코딩이 끝난 프레임은 즉시 전송, DCMIPP–VENC 하드웨어 핸드셰이크(프레임이 다 들어오기 전에 인코딩 시작, M4-6에서 적용) | P0 |
 | F-10 | CDC | PC에서 표준 COM 포트로 열리고, 기본 설정은 115200 8N1이다(USB에서는 설정값일 뿐 실제 속도를 제한하지 않는다) | P0 |
 | F-11 | CDC | 7장의 CLI(프롬프트, 에코, help)로 설정 조회/변경과 상태 조회를 처리한다 | P0 |
 | F-12 | CDC | 디버그 로그를 CDC로 출력한다(레벨 설정 가능) | P1 |
@@ -140,14 +140,16 @@ flowchart LR
 
 **1-A 실제 구성(M3)**: VENC JPEG 입력이 YUV422 인터리브(YUYV)라서 DCMIPP 출력은 YUV422(1280×720×2 = 1.8 MB)다. 캡처 버퍼 3개(최대 1080p 크기로 각 4 MB, 인코딩 중인 버퍼를 덮어쓰지 않게 하나 더 둠), 인코딩 프레임 큐 4×512 KB, VENC 작업 메모리 256 KB로 약 14 MB를 PSRAM에 둔다. PSRAM은 MPU 비캐시. 1-B에서 NV12·H.264 버퍼로 다시 잡는다.
 
+**1-B 실제 구성(M4-6/M4-7)**: DCMIPP PIPE1 출력은 NV12(YUV420 semi-planar)이고, 프레임 버퍼 대신 64줄짜리 줄 버퍼(최대 1080p 폭 기준 180 KB)를 내부 SRAM(AXISRAM2 아래쪽, 개발 모드)에 둔다. DCMIPP가 32줄마다 VENC에 하드웨어 신호를 주어 캡처와 인코딩이 겹친다(VENC_USB 720p_Slice와 같은 방식). PSRAM에는 VENC 작업 메모리(6 MB)와 인코딩 프레임 큐(4×512 KB)만 둔다. M6 플래시 부팅 때 줄 버퍼 위치를 다시 정한다.
+
 **USB 디스크립터 구성(안)**: 엔드포인트 번호는 제안값이며 예제 코드에 맞춰 조정한다.
 
 | 인터페이스 | 클래스 | 엔드포인트 | 용도 |
 | --- | --- | --- | --- |
 | IAD 1 → IF0 | CDC Communication | 0x82 Interrupt IN | 시리얼 상태 알림 |
 | IAD 1 → IF1 | CDC Data | 0x01 Bulk OUT, 0x81 Bulk IN (512 B) | 명령, 응답, 로그 |
-| IAD 2 → IF2 | UVC VideoControl | EP0만 사용 | 카메라 제어 요청, VC header의 baInterfaceNr = 3. 1-A는 bcdUVC = 0x0110, 1-B에서 UVC 1.5를 고르면 0x0150 |
-| IAD 2 → IF3 alt 0 | UVC VideoStreaming | 없음 | 스트림 대기(대역폭 0). 1-A는 MJPEG, 1-B는 H.264 포맷·프레임 디스크립터가 여기 들어간다 |
+| IAD 2 → IF2 | UVC VideoControl | EP0만 사용 | 카메라 제어 요청, VC header의 baInterfaceNr = 3. bcdUVC = 0x0110(1-B도 UVC 1.1 frame-based로 확정) |
+| IAD 2 → IF3 alt 0 | UVC VideoStreaming | 없음 | 스트림 대기(대역폭 0). H.264 frame-based 포맷·프레임 디스크립터(형식 1개, M4-7에서 MJPEG 삭제)가 여기 들어간다 |
 | IAD 2 → IF3 alt 1~ | UVC VideoStreaming | 0x83 Isochronous IN | 1024 B × 3(high-bandwidth, 마이크로프레임당 3 KB, 최대 약 24 MB/s), USB DMA 사용. M3 결정 변경: ×1·DMA 미사용(slave)은 하단 깨짐과 프레임당 전송 약 40 ms(25 fps)로 실패. x-cube-n6-camera-capture와 같은 구성 |
 
 ## 7. CDC CLI 초안
@@ -165,7 +167,7 @@ flowchart LR
 
 ```text
 n6uvc> status
-stream   : on  MJPEG 1280x720@30
+stream   : on  H264 1280x720@30
 fps      : 30.0
 bitrate  : 41.2 Mbps
 drop     : 0
@@ -187,7 +189,6 @@ n6uvc>
 | `cam exp [us]` | 수동 노출 시간 조회/설정 | 공통 |
 | `cam gain [dB]` | 수동 게인 조회/설정 | 공통 |
 | `cam awb <on\|off>` | 자동 화이트밸런스 켜기/끄기 | 공통 |
-| `enc jpegq [0-9]` | MJPEG 품질 조회/설정. VENC JPEG 양자화 수준(0 최저 ~ 9 최고, 기본 6). 1-B 성공 시 삭제 | 1-A |
 | `enc bitrate [kbps]` | H.264 목표 비트레이트 조회/설정(1000~8000) | 1-B |
 | `enc gop [frames]` | IDR 주기 조회/설정(기본 30) | 1-B |
 | `enc idr` | 다음 프레임을 IDR로 강제 | 1-B |

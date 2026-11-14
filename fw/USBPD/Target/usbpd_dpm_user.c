@@ -106,6 +106,12 @@
   */
 
 /* USER CODE BEGIN Private_Variables */
+/* N6UVC(M4): USB 장치 시작/정지를 PD 협상이 아니라 USB-C 케이블 연결(CAD)로만 한다.
+   C to C로 휴대폰에 연결하면 PD 협상 중 USBSTACK_START/STOP이 0.5초마다 반복되어
+   열거가 끝나기 전에 USB가 꺼졌다. 보드 전원은 ST-LINK에서 받으므로 PD 계약은 필요 없다. */
+static uint8_t dpm_usb_dev_on[USBPD_PORT_COUNT] = {0};
+/* PE가 요청한 Error Recovery 횟수(무시한 횟수, USBPD_DPM_EnterErrorRecovery 참고) */
+static uint32_t dpm_pe_errrec = 0U;
 extern USBPD_HandleTypeDef DPM_Ports[USBPD_PORT_COUNT];
 /* USER CODE END Private_Variables */
 /**
@@ -180,7 +186,27 @@ void USBPD_DPM_UserExecute(void const *argument)
 void USBPD_DPM_UserCableDetection(uint8_t PortNum, USBPD_CAD_EVENT State)
 {
 /* USER CODE BEGIN USBPD_DPM_UserCableDetection */
-DPM_USER_DEBUG_TRACE(PortNum, "ADVICE: update USBPD_DPM_UserCableDetection");
+  switch (State)
+  {
+    case USBPD_CAD_EVENT_ATTACHED:
+    case USBPD_CAD_EVENT_ATTEMC:
+      printf("USBPD: attach\r\n");
+      if (dpm_usb_dev_on[PortNum] == 0U)
+      {
+        dpm_usb_dev_on[PortNum] = 1U;
+        USBPD_USBIF_DeviceStart(PortNum);
+      }
+      break;
+    case USBPD_CAD_EVENT_DETACHED:
+    case USBPD_CAD_EVENT_EMC:
+      printf("USBPD: detach\r\n");
+      /* N6UVC: USB 장치는 처음 연결 때 한 번 켠 뒤 끄지 않는다. 끄고 켤 때마다 USBX 스택을
+         해제·재초기화하는 것은 위험하고(UVC 채우기 스레드가 옛 인스턴스를 볼 수 있음), 실제로
+         뽑았다 꽂으면 호스트의 버스 리셋으로 다시 열거된다(VBUS 감지 없음, 노트20 확인). */
+      break;
+    default:
+      break;
+  }
 /* USER CODE END USBPD_DPM_UserCableDetection */
 }
 
@@ -216,30 +242,10 @@ void USBPD_DPM_Notification(uint8_t PortNum, USBPD_NotifyEventValue_TypeDef Even
   /* Manage event notified by the stack? */
   switch(EventVal)
   {
+    /* N6UVC(M4): USB 시작/정지는 UserCableDetection(케이블 연결)에서만 한다 */
     case USBPD_NOTIFY_USBSTACK_START:
-    {
-      if (USBPD_PORTDATAROLE_DFP == DPM_Params[PortNum].PE_DataRole)
-      {
-        USBPD_USBIF_HostStart(PortNum);
-      }
-      else
-      {
-        USBPD_USBIF_DeviceStart(PortNum);
-      }
-      break;
-    }
     case USBPD_NOTIFY_USBSTACK_STOP:
-    {
-      if (USBPD_PORTDATAROLE_DFP == DPM_Params[PortNum].PE_DataRole)
-      {
-        USBPD_USBIF_HostStop(PortNum);
-      }
-      else
-      {
-        USBPD_USBIF_DeviceStop(PortNum);
-      }
       break;
-    }
     case USBPD_NOTIFY_DATAROLESWAP_DFP :
     {
       USBPD_USBIF_Swap2Host(PortNum);
@@ -420,8 +426,13 @@ void USBPD_DPM_ExtendedMessageReceived(uint8_t PortNum, USBPD_ExtendedMsg_TypeDe
 void USBPD_DPM_EnterErrorRecovery(uint8_t PortNum)
 {
 /* USER CODE BEGIN USBPD_DPM_EnterErrorRecovery */
-  /* Inform CAD to enter recovery mode */
-  USBPD_CAD_EnterErrorRecovery(PortNum);
+  /* N6UVC: 보드는 ST-LINK 전원으로 동작하고 PD 계약이 필요 없다. 노트20(C to C)에 부팅 후 연결하면
+     PE가 연결 약 185 ms 뒤 Error Recovery를 요청해 CC 연결/해제가 끝없이 반복되었다(원인 미상,
+     VBUS 측정 오류를 고친 뒤에도 요청은 온다).
+     요청은 세기만 하고 따르지 않는다(케이블 연결 상태와 USB는 그대로 유지). */
+  dpm_pe_errrec++;
+  (void)PortNum;
+  printf("USBPD: PE error recovery request %lu (ignored)\r\n", (unsigned long)dpm_pe_errrec);
 /* USER CODE END USBPD_DPM_EnterErrorRecovery */
 }
 

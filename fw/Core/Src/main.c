@@ -120,7 +120,7 @@ int main(void)
   /* Call PreOsInit function */
   USBPD_PreInitOs();
   /* USER CODE BEGIN 2 */
-  printf("\r\n=== STM32N6 UVC (M4: camera MJPEG/H.264 720p30 + CDC echo) ===\r\n");
+  printf("\r\n=== STM32N6 UVC (M4: camera H.264 720p30 HW handshake + CDC echo) ===\r\n");
   /* 외부 PSRAM: 영상 버퍼가 있으므로 ThreadX(영상 스레드) 시작 전에 켠다 */
   PSRAM_Init();
   /* USER CODE END 2 */
@@ -237,7 +237,9 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK4;
   RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_IC1;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_IC2_IC6_IC11;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV4;
+  /* M4-6: HCLK 200 MHz(SYSCLK 400 / 2). VENC가 HCLK로 돌아서 100 MHz에서는 720p H.264 인코딩이
+     약 18 ms 걸렸다. CubeN6 VENC_USB·x-cube-n6-ai-h264-usb-uvc도 HCLK = SYSCLK / 2. */
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
   RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV1;
@@ -359,7 +361,7 @@ static uint32_t PSRAM_HslvFused(void)
 /**
   * @brief  외부 PSRAM(APS256XX 32MB, XSPI1)을 memory-mapped(0x90000000)로 켠다.
   *         XSPI1 클럭은 IC3 = PLL1(1200 MHz)/6 = 200 MHz. CubeN6 VENC_USB는 HCLK(200 MHz)를
-  *         썼지만 이 프로젝트는 HCLK가 100 MHz라서 IC3를 쓴다.
+  *         썼지만 이 프로젝트는 HCLK와 따로 정하려고 IC3를 쓴다.
   *         HSLV 퓨즈가 꺼져 있으면 패드가 200 MHz를 못 낼 수 있어 100 MHz(/12)로 낮춘다
   *         (영상에 필요한 대역폭 약 120 MB/s는 100 MHz에서도 충분하다).
   *         BSP가 처음엔 1/4 속도로 설정을 쓴 뒤 최종 속도로 올린다.

@@ -341,3 +341,76 @@
 - 앱 해상도 목록에 `MJPEG 1280x720`, `H.264 1280x720` 둘 다 보이고 선택 가능. **H.264를 고르면 영상이 잘 나옴(사용자 확인). M4-5 노트20 H.264 통과** → frame-based(①)로 충분, UVC 1.5(M4-4)·TS(M4-5b)는 필요 없음.
   - 노트20 H.264 로그: sent 29.9~30.1 fps, err 0, LAT total 평균 50.7~51.2 ms / 최대 64~68 ms(cap 29.1, enc 18, usb 3.6, IDR일 때 usb 최대 약 19~22 ms). isoinc 약 50/s로 MJPEG(약 380/s)보다 적음.
 - 기록: 갤럭시 노트20, One UI 5.1(Android 13), ShenYao "USB Camera" 12.3.2. PRD 10장 미결 사항에 반영.
+
+### 2026-11-13 M4-6 지연 개선 1차 (Claude)
+
+분석(H.264 LAT: cap 29.1 + enc 18 + usb 3.6 = 51 ms, IDR일 때 usb 최대 약 20~29 ms):
+- **enc 18 ms**: HCLK가 100 MHz(SYSCLK 400 / 4)였다. VENC는 HCLK로 돈다. ST 예제들은 HCLK 200 MHz.
+- **usb**: 실제 전송률 약 4.3 MB/s(이론 약 24 MB/s). USBX 영상 스레드는 페이로드 하나를 보내고 완료를 기다린 뒤 다음 것을 보내는데, 그 사이에 (1) 완료 콜백 안의 PSRAM→페이로드 복사 3 KB, (2) USBX가 페이로드를 엔드포인트 버퍼로 다시 복사하는 3 KB가 끼어 마이크로프레임을 자주 놓쳤다(isoinc 증가).
+- **cap 29 ms**: 센서가 한 프레임을 내보내는 시간. 줄이려면 DCMIPP–VENC 핸드셰이크(줄 단위 인코딩)가 필요하다. 이번에는 손대지 않음.
+
+수정:
+- `main.c`: HCLK 200 MHz(`RCC_HCLK_DIV2`). I2C·UART·타이머는 HAL이 클럭을 읽어 다시 계산하므로 영향 없음(예상).
+- `ux_user.h`: `UX_DEVICE_ENDPOINT_BUFFER_OWNER 1` → UVC 페이로드 버퍼를 그대로 DMA로 보낸다(복사 1번 제거). 엔드포인트마다 잡던 3 KB 버퍼도 없어짐.
+- `ux_device_video.c`: 페이로드 채우기 스레드(우선순위 21, USBX 영상 스레드 20 바로 아래). 완료 콜백은 신호만 준다. 프레임 데이터가 있으면 페이로드 버퍼(4 → 8개)를 모두 앞서 채우고, 없으면 빈 페이로드는 2개까지만. 스트림 시작/정지 처리도 이 스레드로 옮김(USB 인터럽트 문맥에서 복사·스레드 동작을 하지 않게).
+- 새 통계 `UVCPAY: data N/s, gap>200us M, maxgap X us`: 프레임 데이터 페이로드끼리 전송 간격. 이상적이면 125 us.
+- `h264_enc.c`: IDR 앞의 중복 SPS/PPS 제거(인코더가 `idrHeader=1`로 이미 넣는다). 필러 NAL도 필요 없어짐.
+
+**M4-6 1차 보드 결과(2026-11-13, 사용자, PC H.264)**:
+- LAT total **평균 48.9~49.3 ms / 최대 51.0~51.8 ms**(이전 51.5 / 75.4). cap 29.1, enc 18.1~18.4, usb 평균 1.6 / 최대 5.8 ms(이전 IDR일 때 20~29 ms).
+- USB: UVCPAY gap>200us 0, maxgap 약 130 us(이상값 125 us). IDR 116 KB도 약 6 ms에 보냄 → USB 구간은 해결. isoinc 2(이전에는 계속 증가).
+- **enc는 HCLK 200 MHz로 바꿔도 18 ms 그대로** → VENC 시간은 HCLK가 아니라 PSRAM 대역폭(YUYV 입력 1.8 MB + 참조 읽기 + 복원 쓰기 ≈ 프레임당 5 MB)에 묶인 것으로 보인다.
+- 남은 50 ms 초과분은 최대값 약 2 ms. cap+enc(47 ms)가 직렬이라 더 줄이려면 DCMIPP–VENC 핸드셰이크(줄 단위, cap과 enc를 겹침)가 필요.
+- 부팅 로그에 `USBPD: hard reset tx`가 반복(PC A to C 케이블, PD 상대 없음). USB 시작은 한 번뿐이라 영향 없음.
+
+### 2026-11-13 M4-6 2차: DCMIPP–VENC 하드웨어 핸드셰이크 + M4-7 MJPEG 삭제 (Claude, 사용자 지시)
+
+사용자 결정: "DCMIPP–VENC 핸드셰이크하고 MJPEG는 삭제". 참고: CubeN6 V1.4.1 `VENC_USB`(CubeMX 저장소)의 `venc_h264_config_720p_Slice.h`, `dcmipp_app.c`(`dcmipp_enable_HW_Handshake`), `venc_app.c`(`IsVideoOverflow`, `encoder_reset`).
+
+핸드셰이크(fw/Video):
+- DCMIPP PIPE1 출력 YUYV → **NV12**(`YUV420_2`, pitch = 폭). 프레임 버퍼 3장(PSRAM 12 MB) 대신 **64줄 줄 버퍼**(Y 64줄 + UV 32줄, 최대 폭 1920 기준 180 KB)를 내부 SRAM에 둔다. 링커에 `LINEBUF`(AXISRAM2 아래쪽 0x34100000, 512K, 개발 모드에서 비어 있음)와 `.linebuf_bss` 추가, 매크로 `IN_LINEBUF`.
+- DCMIPP: line wrapping 64줄, LINEMULT 32줄(= VENC 하드웨어 신호). 라인 이벤트 인터럽트는 '늦음' 판단용으로만 센다.
+- VENC: `H264ENC_YUV420_SEMIPLANAR`, `viewMode = SINGLE_BUFFER`, `inputLineBufEn/LoopBackEn/HwModeEn = 1`, depth 2 MB 줄.
+- 흐름: 프레임 끝 이벤트 → 영상 스레드가 바로 `h264_enc_frame()`(다음 프레임을 인코딩, 그 프레임 캡처가 끝날 때까지 VENC 인터럽트를 기다리며 잠듦). 걸기 전에 다음 프레임 라인 이벤트가 이미 왔으면 건너뜀(`late`). `H264ENC_FUSE_ERROR`면 DCMIPP 일시정지 → VENC 리셋 → 인코더 재생성(`desync`).
+- ISP AE/AWB(`BSP_CAMERA_BackgroundProcess`)는 새 `isp` 스레드(우선순위 23, 스택 8K)로 옮김. 영상 스레드(22, 스택 6K)가 인코딩을 기다리는 동안 돈다.
+- 통계 줄 변경: `VIDEO: H264 ... call X ms (max), late N, desync N, ...`. `call`은 인코딩 호출 시간(이제 캡처 시간 포함, 약 30 ms가 정상). LAT의 `enc`(캡처 완료 → 인코딩 완료)가 0~2 ms로 줄어야 한다.
+
+MJPEG 삭제(M4-7, PRD F-02/F-08):
+- `jpeg_enc.c/.h` 삭제, UVC 디스크립터에서 MJPEG 형식·프레임·색 디스크립터 삭제 → H.264 frame-based가 형식 1(구성 디스크립터 273 → 226 B). Commit 형식 전환, `video_set_format()`, `VFQ_FMT_MJPEG`, `jpeg_q` 설정 삭제. VideoEncoder 라이브러리의 `source/jpeg`는 그대로(링커가 안 쓰는 코드 제거).
+- 참고 코드는 태그 `m3-mjpeg-ref`.
+
+확인: 바뀐 C 파일 7개를 arm-none-eabi-gcc `-fsyntax-only -Wall`로 검사해 오류·경고 없음. 빌드·링크는 사용자가 한다.
+
+**M4-6 2차 보드 결과(2026-11-14, 사용자 로그)**: 핸드셰이크 정상 동작.
+- VIDEO: cap/enc 30.0 fps, late 0, desync 0, err 0, pipeerr 0, call 30~31 ms(캡처 시간 포함, 정상). IDR 72~93 KB, 평균 16 KB. max 197 KB는 시작 직후 첫 IDR(율 제어 초기값).
+- LAT(정상 구간): **cap 25.9 / enc 0.0 / wait 0.0 / usb 1.6(최대 4.8) / total 평균 27.6 ms, 최대 31.0 ms** → 장치 내부 50 ms 목표 달성(1차 49.3/51.8에서 약 22 ms 줄어듦). 첫 통계 구간의 wait 최대 26.8·total 최대 57.4는 스트림 시작 직후 한 번.
+- cap이 29.1 → 25.9 ms로 준 것은 DCMIPP 출력량 감소(NV12, PSRAM 쓰기 없음) 때문으로 보인다.
+- UVC: 29.9~30.0 fps, isoinc 0, UVCPAY maxgap 약 129 us.
+- 남은 확인: 화면(깨짐·색), 노트20 H.264, CDC 에코, 스톱워치로 전체 지연(100 ms 이하).
+
+### 2026-11-14 노트20(C to C) 연결 문제 수정 (Claude, 사용자 보고)
+
+증상(사용자): 노트20에 C to C로 연결하면 ① 보드 실행 후 꽂으면 인식 못 함(CC 연결/해제가 약 0.67초 주기로 반복), ② 꽂은 채 실행하면 인식은 되지만 영상 없음(`BSP_CAMERA_Init ret -7`).
+
+원인과 수정(진단 출력으로 확인):
+- ① **PD 스택(PE)이 연결 약 185 ms 뒤 Error Recovery를 요청** → CAD가 Rd를 떼고 detach → 다시 attach, 무한 반복. TCPP0203 FLGn(과전류 등)은 원인이 아니었다(연결 때 VBUS_OK만). 보드는 ST-LINK 전원이라 PD 계약이 필요 없으므로 `USBPD_DPM_EnterErrorRecovery()`에서 요청을 세기만 하고 따르지 않는다(로그 `USBPD: PE error recovery request n (ignored)`). PE가 왜 요청하는지는 미상(라이브러리 내부).
+- CAD detach 때 USB 장치를 끄던 것(USBX 스택 해제·재초기화)을 없앴다. 처음 attach 때 한 번 켜고 끄지 않는다. 실제로 뽑았다 꽂으면 버스 리셋으로 다시 열거된다.
+- **VBUS 측정값 1.83배 오류**: N6 ADC 기준전압은 1.8 V인데 `VDD_VALUE`가 3300(BSP USBPD VBUS 환산에만 쓰임) → 5.3 V가 9.7 V로 읽혔다. `stm32n6xx_hal_conf.h`에서 1800으로. (이것만으로는 ①이 해결되지 않았다.)
+- ② 꽂은 채 부팅하면 PD 하드 리셋과 겹쳐 IMX335 I2C 확인이 실패(-7). `BSP_CAMERA_Init` 실패 시 DCMIPP 해제 후 300 ms 쉬고 최대 3번 재시도(매번 카메라 전원 재투입). 두 번째 시도에서 성공함.
+
+보드 결과(노트20 + ShenYao USB Camera): ① 실행 후 연결, ② 연결한 채 실행, ③ 영상 중 뽑았다 다시 꽂기 모두 영상 정상. USB HS, 30 fps, 장치 내부 지연 평균 27.6 / 최대 30.9 ms.
+
+남은 것: 꽂은 채 부팅하면 PD 하드 리셋(3회)과 Error Recovery 요청 1회가 로그에 나오지만 영상에는 영향 없음. 다른 기기에서 문제가 생기면 PD 메시지를 쓰지 않는 `USBPDCORE_NOPD_CM55` 라이브러리로 바꾸는 것을 검토(로컬 CubeN6 V1.4.1에 있음). 진단 출력(VBUS, CC/FLG, UVC 요청 카운터, PD 이벤트 번호)은 정리하고 attach/detach 한 줄씩만 남겼다.
+
+### 2026-11-14 전체 지연 스톱워치 측정(노트20, 사용자) — 후속은 나중에
+
+- 스톱워치 폰 화면과 노트20(ShenYao USB Camera) 화면을 한 사진에: 130 / 260 / 130 ms(평균 약 170 ms) → 목표 100 ms 초과.
+- 장치 내부 27.6 ms + 센서 노출(최대 약 33 ms) + 화면 표시(약 17~33 ms)를 빼면 약 80~200 ms가 폰 앱 디코딩 버퍼로 추정. 인코더는 SPS VUI에 bitstream_restriction(재정렬 없음)을 이미 넣는다.
+- 사용자 결정: 지연 후속은 나중에. 할 일: PC에서 `ffplay -f dshow -vcodec h264 -fflags nobuffer -flags low_delay -framedrop`로 같은 측정을 해 보드/앱 구간 분리, 다른 UVC 뷰어 앱 비교.
+- 화질 메모: 화면이 실제보다 약간 보랏빛(AWB 확인 필요).
+
+### 2026-11-14 PC에서 H.264 UVC + CDC 동시 확인 (사용자)
+
+- Windows PC에서 `ffplay -f dshow -vcodec h264 -fflags nobuffer -flags low_delay -framedrop -i video="STM32N6 UVC CDC"`(ffmpeg gyan.dev essentials)로 H.264 영상 재생, 동시에 Tera Term(CN18 USB CDC 포트) 에코 정상.
+- 처음에 ffplay가 `vq=0KB`로 멈춘 것은 다른 프로그램이 카메라를 잡고 있었기 때문(모두 닫고 다시 실행하니 정상).
+- H.264만 남은 뒤 Windows 기본 카메라 앱은 형식을 못 고르므로 PC 확인은 ffplay(또는 OBS '비디오 캡처 장치' 형식 H264)로 한다.

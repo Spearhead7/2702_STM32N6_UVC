@@ -296,10 +296,9 @@ typedef struct
   uint8_t iTerminal;
 } __PACKED USBD_VIDEOOutputTerminalDescTypeDef;
 
-/* VS 인터페이스의 형식 수: 1 = MJPEG, 2 = H.264 frame-based (M4-3) */
-#define UVC_NUM_FORMATS                               2U
-#define UVC_FMT_IDX_MJPEG                             1U
-#define UVC_FMT_IDX_H264                              2U
+/* VS 인터페이스의 형식: H.264 frame-based 하나(M4-7에서 MJPEG 삭제) */
+#define UVC_NUM_FORMATS                               1U
+#define UVC_FMT_IDX_H264                              1U
 
 /* Video Streaming Interface Input Header Descriptor (13 + 형식 수 바이트) */
 typedef struct
@@ -469,7 +468,7 @@ uint16_t USBD_Get_Configuration_Number(uint8_t class_type, uint8_t interface_typ
 #define USBD_CDCACM_EPINCMD_FS_BINTERVAL              5U
 #define USBD_CDCACM_EPINCMD_HS_BINTERVAL              5U
 
-/* Device VIDEO Class (IF2-3). M3: 1280x720 30fps MJPEG.
+/* Device VIDEO Class (IF2-3). 1280x720 30fps H.264 frame-based.
    HS high-bandwidth isochronous: 1024 B x 3 패킷/마이크로프레임(최대 약 24 MB/s).
    x-cube-n6-camera-capture(USBL_PACKET_PER_MICRO_FRAME=3)와 같다. 1 패킷이면 페이로드마다
    스레드를 거치는 비용 때문에 한 프레임(약 68 KB) 전송에 약 40 ms가 걸려 30 fps를 못 냈다.
@@ -488,17 +487,14 @@ uint16_t USBD_Get_Configuration_Number(uint8_t class_type, uint8_t interface_typ
 #define UVC_CAM_FPS_FS                                10U
 #define UVC_CAM_FPS_HS                                30U
 
-#define UVC_MIN_BIT_RATE(n)                           (UVC_FRAME_WIDTH * UVC_FRAME_HEIGHT * 16U * (n))
-#define UVC_MAX_BIT_RATE(n)                           (UVC_FRAME_WIDTH * UVC_FRAME_HEIGHT * 16U * (n))
 #define UVC_INTERVAL(n)                               (10000000U/(n))
 #define UVC_MAX_FRAME_SIZE                            (512U * 1024U)  /* 한 프레임 최대 = VFQ_SLOT_SIZE */
 /* H.264 프레임 디스크립터의 비트레이트(bps). 인코더 CBR 목표 4 Mbps, 최대는 여유를 둔다. */
 #define UVC_H264_MIN_BIT_RATE                         1000000U
 #define UVC_H264_MAX_BIT_RATE                         16000000U
 
-/* VS 헤더 wTotalLength: VS 헤더(13+형식 수) + MJPEG(형식 11 + 프레임 30 + 색 6)
-   + H.264(형식 28 + 프레임 30 + 색 6) */
-#define VC_HEADER_SIZE                                (13U + UVC_NUM_FORMATS + 11U + 30U + 6U + 28U + 30U + 6U)
+/* VS 헤더 wTotalLength: VS 헤더(13+형식 수) + H.264(형식 28 + 프레임 30 + 색 6) */
+#define VC_HEADER_SIZE                                (13U + UVC_NUM_FORMATS + 28U + 30U + 6U)
 
 #ifndef USBD_CONFIG_STR_DESC_IDX
 #define USBD_CONFIG_STR_DESC_IDX                      0U

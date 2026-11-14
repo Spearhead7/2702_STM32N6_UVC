@@ -161,7 +161,9 @@ extern "C" {
 /**
   * @brief This is the HAL system configuration section
   */
-#define  VDD_VALUE                  3300UL /*!< Value of VDD in mv */
+/* N6UVC: ADC 기준전압(VREF+ = VDDA 1.8 V). 이 프로젝트에서는 BSP USBPD의 VBUS 환산에만 쓰인다.
+   3300이면 VBUS가 1.83배로 읽혀(5.3 V → 9.7 V) PD 스택이 과전압으로 보고 Error Recovery를 반복했다. */
+#define  VDD_VALUE                  1800UL /*!< Value of VDD in mv */
 #define  TICK_INT_PRIORITY          15U  /*!< tick interrupt priority (lowest by default) */
 #define  USE_RTOS                   0U
 

@@ -60,6 +60,8 @@ VOID USBD_VIDEO_StreamPayloadDone(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
 UINT USBD_VIDEO_StreamRequest(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
                               UX_SLAVE_TRANSFER *transfer);
 ULONG USBD_VIDEO_StreamGetMaxPayloadBufferSize(VOID);
+/* 페이로드 채우기 스레드 생성(USBX 장치 초기화에서 한 번) */
+UINT  USBD_VIDEO_FillThreadInit(VOID);
 
 /* USER CODE BEGIN EFP */
 
@@ -96,7 +98,7 @@ typedef struct
 #endif
 
 #ifndef USBD_VIDEO_PAYLOAD_BUFFER_NUMBER
-#define USBD_VIDEO_PAYLOAD_BUFFER_NUMBER  4
+#define USBD_VIDEO_PAYLOAD_BUFFER_NUMBER  8   /* M4-6: 채우기 스레드가 앞서 채울 여유 */
 #endif
 
 /* USER CODE BEGIN 1 */

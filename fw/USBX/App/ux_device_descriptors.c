@@ -841,8 +841,6 @@ static void USBD_FrameWork_VIDEO_Desc(USBD_DevClassHandleTypeDef *pdev,
   USBD_VIDEOInputTerminalDescTypeDef *pVideoITDesc;
   USBD_VIDEOOutputTerminalDescTypeDef *pVideoOTDesc;
   USBD_VIDEOVSHeaderDescTypeDef *pVideoSHeaderDesc;
-  USBD_VIDEOPayloadFormatDescTypeDef *pVideoPayForDesc;
-  USBD_VIDEOFrameDescTypeDef *pVideoFrameDesc;
   USBD_VIDEOFrameBasedFormatDescTypeDef *pFbFormatDesc;
   USBD_VIDEOFrameBasedFrameDescTypeDef *pFbFrameDesc;
   /* H.264 GUID 34363248-0000-0010-8000-00AA00389B71 */
@@ -933,53 +931,7 @@ static void USBD_FrameWork_VIDEO_Desc(USBD_DevClassHandleTypeDef *pdev,
   }
   *Sze += (uint32_t)sizeof(USBD_VIDEOVSHeaderDescTypeDef);
 
-  /* MJPEG Payload Format Descriptor */
-  pVideoPayForDesc = ((USBD_VIDEOPayloadFormatDescTypeDef *)(pConf + *Sze));
-  pVideoPayForDesc->bLength = (uint8_t)sizeof(USBD_VIDEOPayloadFormatDescTypeDef);
-  pVideoPayForDesc->bDescriptorType = UX_DEVICE_CLASS_VIDEO_CS_INTERFACE;
-  pVideoPayForDesc->bDescriptorSubType = UX_DEVICE_CLASS_VIDEO_VS_FORMAT_MJPEG;
-  pVideoPayForDesc->bFormatIndex = UVC_FMT_IDX_MJPEG;
-  pVideoPayForDesc->bNumFrameDescriptors = 0x01U;
-  pVideoPayForDesc->bmFlags = 0x01U;
-  pVideoPayForDesc->bDefaultFrameIndex = 0x01U;
-  pVideoPayForDesc->bAspectRatioX = 0x00U;
-  pVideoPayForDesc->bAspectRatioY = 0x00U;
-  pVideoPayForDesc->bmInterlaceFlag = 0x00U;
-  pVideoPayForDesc->bCopyProtect = 0x00U;
-  *Sze += (uint32_t)sizeof(USBD_VIDEOPayloadFormatDescTypeDef);
-
-  /* MJPEG Frame Descriptor */
-  pVideoFrameDesc = ((USBD_VIDEOFrameDescTypeDef *)(pConf + *Sze));
-  pVideoFrameDesc->bLength = (uint8_t)sizeof(USBD_VIDEOFrameDescTypeDef);
-  pVideoFrameDesc->bDescriptorType = UX_DEVICE_CLASS_VIDEO_CS_INTERFACE;
-  pVideoFrameDesc->bDescriptorSubType = UX_DEVICE_CLASS_VIDEO_VS_FRAME_MJPEG;
-  pVideoFrameDesc->bFrameIndex = 0x01U;
-  pVideoFrameDesc->bmCapabilities = 0x02U;
-  pVideoFrameDesc->wWidth = UVC_FRAME_WIDTH;
-  pVideoFrameDesc->wHeight = UVC_FRAME_HEIGHT;
-
-  if (pdev->Speed == (uint8_t)USBD_HIGH_SPEED)
-  {
-    pVideoFrameDesc->dwMinBitRate = UVC_MIN_BIT_RATE(UVC_CAM_FPS_HS);
-    pVideoFrameDesc->dwMaxBitRate = UVC_MAX_BIT_RATE(UVC_CAM_FPS_HS);
-    pVideoFrameDesc->dwDefaultFrameInterval = UVC_INTERVAL(UVC_CAM_FPS_HS);
-    pVideoFrameDesc->dwFrameInterval = UVC_INTERVAL(UVC_CAM_FPS_HS);
-  }
-  else
-  {
-    pVideoFrameDesc->dwMinBitRate = UVC_MIN_BIT_RATE(UVC_CAM_FPS_FS);
-    pVideoFrameDesc->dwMaxBitRate = UVC_MAX_BIT_RATE(UVC_CAM_FPS_FS);
-    pVideoFrameDesc->dwDefaultFrameInterval = UVC_INTERVAL(UVC_CAM_FPS_FS);
-    pVideoFrameDesc->dwFrameInterval = UVC_INTERVAL(UVC_CAM_FPS_FS);
-  }
-
-  pVideoFrameDesc->dwMaxVideoFrameBufferSize = UVC_MAX_FRAME_SIZE;
-  pVideoFrameDesc->bFrameIntervalType = 0x01U;
-  *Sze += (uint32_t)sizeof(USBD_VIDEOFrameDescTypeDef);
-
-  USBD_FrameWork_VIDEO_ColorDesc(pConf, Sze);
-
-  /* H.264 Frame-based Payload Format Descriptor (M4-3) */
+  /* H.264 Frame-based Payload Format Descriptor (M4-3, M4-7부터 유일한 형식) */
   pFbFormatDesc = ((USBD_VIDEOFrameBasedFormatDescTypeDef *)(pConf + *Sze));
   pFbFormatDesc->bLength = (uint8_t)sizeof(USBD_VIDEOFrameBasedFormatDescTypeDef);
   pFbFormatDesc->bDescriptorType = UX_DEVICE_CLASS_VIDEO_CS_INTERFACE;

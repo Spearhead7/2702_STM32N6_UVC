@@ -52,6 +52,9 @@ MEMORY
   /* 외부 PSRAM(APS256XX, 32MB, XSPI1 memory-mapped). main()에서 초기화한 뒤에만 쓸 수 있다.
      MPU 비캐시. 영상 프레임·VENC 작업 메모리·인코딩 프레임 큐용. */
   PSRAM  (xrw)    : ORIGIN = 0x90000000,   LENGTH = 32M
+  /* AXISRAM2 아래쪽 512K(0x34100000~). 개발 모드에서는 비어 있다. DCMIPP–VENC 핸드셰이크
+     줄 버퍼(IN_LINEBUF)용. M6 플래시 부팅 배치 때 다시 정한다. */
+  LINEBUF (rw)    : ORIGIN = 0x34100000,   LENGTH = 512K
 }
 
 /* Sections */
@@ -217,6 +220,15 @@ SECTIONS
     . = ALIGN(32);
     __psram_bss_end__ = .;
   } >PSRAM
+
+  /* 핸드셰이크 줄 버퍼(IN_LINEBUF). NOLOAD: DCMIPP가 쓰고 VENC가 읽기만 한다. */
+  .linebuf_bss (NOLOAD) :
+  {
+    . = ALIGN(32);
+    *(.linebuf_bss)
+    *(.linebuf_bss*)
+    . = ALIGN(32);
+  } >LINEBUF
 
   .usbx_data 0x341FD000 (NOLOAD):
   {

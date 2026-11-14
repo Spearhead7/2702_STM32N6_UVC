@@ -21,9 +21,9 @@ extern "C" {
 #define VFQ_SLOT_NUM        4U
 #define VFQ_SLOT_SIZE       (512U * 1024U)   /* 한 프레임 최대 크기(바이트) */
 
+/* 프레임 형식. M4-7에서 MJPEG(0)를 지워 H.264만 남았다. 2단계 녹화 등 다른 형식을 위해 필드는 둔다. */
 typedef enum
 {
-  VFQ_FMT_MJPEG = 0,
   VFQ_FMT_H264  = 1,
 } vfq_format_t;
 
@@ -35,7 +35,7 @@ typedef struct
   uint32_t      seq;        /* 1부터 증가하는 프레임 번호 */
   uint32_t      ts_ms;      /* 캡처 완료 시각(HAL tick, ms) */
   vfq_format_t  format;
-  uint8_t       key;        /* 키프레임(JPEG는 항상 1) */
+  uint8_t       key;        /* 키프레임(H.264 IDR) */
   /* 지연 측정용 시각(vtime_now() 사이클). 0이면 기록 안 됨 */
   uint32_t      t_cap_start; /* 캡처 시작(DCMIPP VSYNC) */
   uint32_t      t_cap_end;   /* 캡처 완료(DCMIPP 프레임 이벤트) */

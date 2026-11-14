@@ -109,6 +109,12 @@ UINT MX_USBX_Device_Init(VOID *memory_ptr)
   }
 
   /* USER CODE BEGIN MX_USBX_Device_Init 2 */
+  /* UVC 페이로드 채우기 스레드(M4-6) */
+  if (USBD_VIDEO_FillThreadInit() != TX_SUCCESS)
+  {
+    return TX_THREAD_ERROR;
+  }
+
   /* Allocate the stack for the cdc acm echo thread */
   if (tx_byte_allocate(byte_pool, (VOID **) &pointer, CDC_ECHO_THREAD_STACK_SIZE,
                        TX_NO_WAIT) != TX_SUCCESS)

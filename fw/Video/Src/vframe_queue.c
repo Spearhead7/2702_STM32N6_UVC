@@ -40,7 +40,7 @@ void vfq_init(void)
     vfq_slot[i].size     = 0U;
     vfq_slot[i].seq      = 0U;
     vfq_slot[i].ts_ms    = 0U;
-    vfq_slot[i].format   = VFQ_FMT_MJPEG;
+    vfq_slot[i].format   = VFQ_FMT_H264;
     vfq_slot[i].key      = 0U;
     vfq_slot[i].state    = ST_FREE;
     vfq_slot[i].refcnt   = 0U;

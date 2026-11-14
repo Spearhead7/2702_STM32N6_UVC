@@ -108,7 +108,8 @@ USBPD_USER_SettingsTypeDef       DPM_USER_Settings[USBPD_PORT_COUNT] =
   {
     .PE_DataSwap = USBPD_FALSE,                  /* support data swap                                       */
     .PE_VconnSwap = USBPD_FALSE,                 /* support VCONN swap                                  */
-    .PE_DR_Swap_To_DFP = USBPD_TRUE,                  /*  Support of DR Swap to DFP                                  */
+    .PE_DR_Swap_To_DFP = USBPD_FALSE,                 /* N6UVC: 보드는 항상 장치(UFP). 호스트로 바뀌지 않게 */
+    /* .PE_DR_Swap_To_DFP = USBPD_TRUE, */                  /*  Support of DR Swap to DFP                                  */
     .PE_DR_Swap_To_UFP = USBPD_TRUE,                  /*  Support of DR Swap to UFP                                  */
      .DPM_SNKExtendedCapa =                        /*!< SNK Extended Capability        */
 	 {

@@ -51,13 +51,38 @@
 #define UVC_HDR_EOF                0x02U   /* 프레임 마지막 페이로드 */
 #define UVC_HDR_EOH                0x80U
 
-/* 스트림 시작 때 미리 채워 두는 페이로드 수(USBD_VIDEO_PAYLOAD_BUFFER_NUMBER보다 작게) */
-#define UVC_PREFILL_PAYLOADS       2U
+/* M4-6 페이로드 채우기 스레드.
+   USBX 영상 스레드(우선순위 20)는 페이로드 하나를 보내고 완료를 기다린 뒤 완료 콜백을 부르고
+   다음 페이로드를 보낸다. 예전에는 이 콜백에서 PSRAM 복사(3 KB)를 해서 그동안 다음 전송이 늦어졌다.
+   이제 콜백은 신호만 주고, 이 스레드(21)가 전송 중인 사이에 빈 페이로드 버퍼를 채운다.
+   보낼 프레임 데이터가 있으면 버퍼를 모두 채우고, 없으면 빈(헤더만) 페이로드를 조금만 쌓아 둔다
+   (새 프레임이 빈 페이로드 뒤에서 오래 기다리지 않게). */
+#define UVC_FILL_THREAD_PRIO       21U
+#define UVC_FILL_STACK_SIZE        3072U
+#define UVC_FILL_EVT_START         0x01U
+#define UVC_FILL_EVT_STOP          0x02U
+#define UVC_FILL_EVT_DONE          0x04U
+#define UVC_MIN_QUEUED             2U     /* 데이터가 없을 때 쌓아 둘 빈 페이로드 수 */
+/* 페이로드 간격 통계: 이보다 길면 마이크로프레임(125 us)을 놓친 것으로 본다 */
+#define UVC_GAP_LIMIT_US           200U
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
 ULONG uvc_state;
+
+static TX_THREAD       uvc_fill_thread;
+static TX_EVENT_FLAGS_GROUP uvc_fill_flags;
+static ULONG           uvc_fill_stack[UVC_FILL_STACK_SIZE / sizeof(ULONG)];
+static UX_DEVICE_CLASS_VIDEO_STREAM *volatile uvc_fill_stream = UX_NULL;
+
+/* 페이로드 전송 간격(데이터 페이로드끼리). 5초 통계 */
+static volatile uint32_t uvc_gap_last = 0U;
+static volatile uint32_t uvc_gap_max_us = 0U;
+static volatile uint32_t uvc_gap_over = 0U;     /* UVC_GAP_LIMIT_US를 넘은 횟수 */
+static volatile uint32_t uvc_data_payloads = 0U;
+static volatile uint8_t  uvc_last_was_data = 0U;
+static uint8_t           uvc_written_data[USBD_VIDEO_PAYLOAD_BUFFER_NUMBER];
 UX_DEVICE_CLASS_VIDEO *video;
 UX_DEVICE_CLASS_VIDEO_STREAM *stream_write;
 
@@ -66,12 +91,9 @@ static vfq_frame_t *uvc_frame = UX_NULL;
 static uint32_t     uvc_frame_off = 0U;
 static uint32_t     uvc_last_seq = 0U;
 static uint8_t      uvc_fid = 0U;
-/* 호스트가 Commit으로 고른 형식(VFQ_FMT_*). 디스크립터 형식 1 = MJPEG, 2 = H.264.
-   스트림을 열 때 인코더를 이 형식으로 바꾸고, 형식이 다른 프레임은 보내지 않는다.
-   H.264는 스트림 시작 후 키프레임(IDR, SPS/PPS 포함)부터 보낸다. */
-static uint32_t     uvc_format = VFQ_FMT_MJPEG;
+/* 형식은 H.264 하나(M4-7에서 MJPEG 삭제). 스트림 시작 후 키프레임(IDR, SPS/PPS 포함)부터 보낸다. */
 static uint8_t      uvc_need_key = 1U;
-volatile uint32_t   uvc_skipped_frames = 0U;   /* 형식이 다르거나 키프레임 대기로 건너뛴 프레임 */
+volatile uint32_t   uvc_skipped_frames = 0U;   /* 키프레임 대기로 건너뛴 프레임 */
 
 /* 통계(디버그용) */
 volatile uint32_t   uvc_frames_sent = 0U;
@@ -151,13 +173,14 @@ static USBD_VideoControlTypeDef video_Commit_Control =
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
-static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream);
+static UINT video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream);
 static VOID video_stream_reset(VOID);
+static VOID uvc_fill_thread_entry(ULONG arg);
 
 /* 디스크립터에 있는 형식 번호인지 */
 static UCHAR uvc_format_index_valid(UCHAR idx)
 {
-  return (UCHAR)((idx == UVC_FMT_IDX_MJPEG) || (idx == UVC_FMT_IDX_H264));
+  return (UCHAR)(idx == UVC_FMT_IDX_H264);
 }
 /* USER CODE END PFP */
 
@@ -205,7 +228,7 @@ VOID USBD_VIDEO_Deactivate(VOID *video_instance)
   stream_write = UX_NULL;
 
   uvc_state = UVC_PLAY_STATUS_STOP;
-  video_stream_reset();
+  (void)tx_event_flags_set(&uvc_fill_flags, UVC_FILL_EVT_STOP, TX_OR);
 
   /* USER CODE END USBD_VIDEO_Deactivate */
 
@@ -226,27 +249,17 @@ VOID USBD_VIDEO_StreamChange(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
   /* USER CODE BEGIN USBD_VIDEO_StreamChange */
 
   /* 호스트가 영상을 닫음(대체 설정 0) */
+  /* USB 인터럽트 문맥일 수 있으므로 여기서는 신호만 주고, 채우기 스레드가 처리한다 */
   if (alternate_setting == 0U)
   {
     uvc_state = UVC_PLAY_STATUS_STOP;
-    video_stream_reset();
+    (void)tx_event_flags_set(&uvc_fill_flags, UVC_FILL_EVT_STOP, TX_OR);
     return;
   }
 
-  /* 영상 시작: 호스트가 고른 형식으로 인코더를 바꾸고(이미 같으면 그대로) 키프레임을 요청한다.
-     가장 최근 프레임부터 보낸다. */
-  video_stream_reset();
-  video_set_format(uvc_format);
-  video_request_keyframe();
-  uvc_state = UVC_PLAY_STATUS_STREAMING;
-
-  for (ULONG i = 0U; i < UVC_PREFILL_PAYLOADS; i++)
-  {
-    video_write_payload(video_stream);
-  }
-
-  /* Start sending valid payloads in the Video class */
-  ux_device_class_video_transmission_start(video_stream);
+  /* 영상 시작: 채우기 스레드가 상태를 지우고, 인코더 형식을 맞추고, 페이로드를 채운 뒤 전송을 시작한다 */
+  uvc_fill_stream = video_stream;
+  (void)tx_event_flags_set(&uvc_fill_flags, UVC_FILL_EVT_START, TX_OR);
 
   /* USER CODE END USBD_VIDEO_StreamChange */
 
@@ -266,12 +279,14 @@ VOID USBD_VIDEO_StreamPayloadDone(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
   /* USER CODE BEGIN USBD_VIDEO_StreamPayloadDone */
   UX_PARAMETER_NOT_USED(length);
 
+  UX_PARAMETER_NOT_USED(video_stream);
+
   uvc_lat_on_payload_done();
 
-  /* 페이로드 하나가 나갈 때마다 하나를 채운다(보낼 프레임이 없으면 헤더만) */
+  /* 버퍼가 하나 비었다: 채우기 스레드에 알린다(복사는 그쪽에서) */
   if (uvc_state == UVC_PLAY_STATUS_STREAMING)
   {
-    video_write_payload(video_stream);
+    (void)tx_event_flags_set(&uvc_fill_flags, UVC_FILL_EVT_DONE, TX_OR);
   }
   /* USER CODE END USBD_VIDEO_StreamPayloadDone */
 
@@ -370,13 +385,11 @@ UINT USBD_VIDEO_StreamRequest(UX_DEVICE_CLASS_VIDEO_STREAM *video_stream,
       {
         case UX_DEVICE_CLASS_VIDEO_SET_CUR:
 
-          /* 형식 확정: 스트림을 열 때(대체 설정 1) 이 형식으로 인코딩한다 */
           if ((transfer->ux_slave_transfer_request_actual_length >= 4U) &&
               (uvc_format_index_valid(data[2]) != 0U))
           {
             video_Commit_Control.bFormatIndex = data[2];
             video_Commit_Control.bFrameIndex = 0x01U;
-            uvc_format = (data[2] == UVC_FMT_IDX_H264) ? VFQ_FMT_H264 : VFQ_FMT_MJPEG;
           }
           status = UX_SUCCESS;
 
@@ -460,18 +473,100 @@ static VOID video_stream_reset(VOID)
   uvc_pay_written = 0U;
   uvc_pay_done = 0U;
   uvc_lat_pend.valid = 0U;
+  uvc_last_was_data = 0U;
+}
+
+/**
+  * @brief  UVC 페이로드 채우기 스레드를 만든다(USBX 장치 초기화에서 한 번).
+  */
+UINT USBD_VIDEO_FillThreadInit(VOID)
+{
+  UINT ret;
+
+  ret = tx_event_flags_create(&uvc_fill_flags, "uvc fill");
+  if (ret != TX_SUCCESS)
+  {
+    return ret;
+  }
+  return tx_thread_create(&uvc_fill_thread, "uvc_fill", uvc_fill_thread_entry, 0U,
+                          uvc_fill_stack, sizeof(uvc_fill_stack),
+                          UVC_FILL_THREAD_PRIO, UVC_FILL_THREAD_PRIO,
+                          TX_NO_TIME_SLICE, TX_AUTO_START);
+}
+
+/**
+  * @brief  빈 페이로드 버퍼를 채운다. 프레임 데이터가 있으면 버퍼를 모두 채우고,
+  *         없으면 빈 페이로드를 UVC_MIN_QUEUED개까지만 쌓는다.
+  */
+static VOID uvc_fill_top_up(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
+{
+  while ((uvc_state == UVC_PLAY_STATUS_STREAMING) &&
+         ((uvc_pay_written - uvc_pay_done) < USBD_VIDEO_PAYLOAD_BUFFER_NUMBER))
+  {
+    UINT had_data = video_write_payload(stream);
+
+    if (had_data == 2U)
+    {
+      break;   /* 페이로드 버퍼를 못 얻음 */
+    }
+    if ((had_data == 0U) && ((uvc_pay_written - uvc_pay_done) >= UVC_MIN_QUEUED))
+    {
+      break;
+    }
+  }
+}
+
+static VOID uvc_fill_thread_entry(ULONG arg)
+{
+  ULONG flags;
+  UX_DEVICE_CLASS_VIDEO_STREAM *stream = UX_NULL;
+
+  UX_PARAMETER_NOT_USED(arg);
+
+  while (1)
+  {
+    if (tx_event_flags_get(&uvc_fill_flags,
+                           UVC_FILL_EVT_START | UVC_FILL_EVT_STOP | UVC_FILL_EVT_DONE,
+                           TX_OR_CLEAR, &flags, TX_WAIT_FOREVER) != TX_SUCCESS)
+    {
+      continue;
+    }
+
+    if ((flags & UVC_FILL_EVT_STOP) != 0U)
+    {
+      stream = UX_NULL;
+      video_stream_reset();
+    }
+
+    if ((flags & UVC_FILL_EVT_START) != 0U)
+    {
+      stream = uvc_fill_stream;
+      video_stream_reset();
+      /* 디코더가 바로 시작할 수 있게 키프레임(IDR + SPS/PPS)을 요청한다 */
+      video_request_keyframe();
+      uvc_state = UVC_PLAY_STATUS_STREAMING;
+      uvc_fill_top_up(stream);
+      ux_device_class_video_transmission_start(stream);
+      continue;
+    }
+
+    if ((stream != UX_NULL) && (uvc_state == UVC_PLAY_STATUS_STREAMING))
+    {
+      uvc_fill_top_up(stream);
+    }
+  }
 }
 
 /**
   * @brief  video_write_payload
-  *         페이로드 하나(최대 MPS)를 만든다. 프레임 큐에서 가장 최근 JPEG을 빌려
+  *         페이로드 하나(최대 MPS)를 만든다. 프레임 큐에서 가장 최근 프레임을 빌려
   *         (MPS - 2) 바이트씩 잘라 보내고, 마지막 조각에 EOF를 붙인다.
   *         보낼 프레임이 없으면 헤더만 보낸다(호스트는 빈 페이로드를 무시한다).
   *         USBX 영상 스레드 또는 USB 인터럽트(스트림 시작) 문맥에서 불린다.
   * @param  stream : Video class stream instance.
   * @retval none
   */
-static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
+static UINT video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
 {
   ULONG buffer_length;
   UCHAR *buffer;
@@ -481,13 +576,13 @@ static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
 
   if (uvc_state != UVC_PLAY_STATUS_STREAMING)
   {
-    return;
+    return 2U;
   }
 
   if (ux_device_class_video_write_payload_get(stream, &buffer, &buffer_length) != UX_SUCCESS)
   {
     uvc_payload_get_fail++;
-    return;
+    return 2U;
   }
 
   /* 한 페이로드 최대 = 패킷 크기 x 마이크로프레임당 패킷 수(wMaxPacketSize bit 12:11 + 1) */
@@ -505,7 +600,7 @@ static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
   {
     uvc_frame = vfq_acquire_latest(uvc_last_seq);
     if ((uvc_frame != UX_NULL) &&
-        ((uvc_frame->format != (vfq_format_t)uvc_format) || ((uvc_need_key != 0U) && (uvc_frame->key == 0U))))
+        (uvc_need_key != 0U) && (uvc_frame->key == 0U))
     {
       uvc_last_seq = uvc_frame->seq;
       vfq_release(uvc_frame);
@@ -540,13 +635,17 @@ static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
     {
       info |= UVC_HDR_EOF;
       uvc_last_seq = uvc_frame->seq;
-      /* 이 페이로드(EOF)가 전송 완료되면 지연을 기록한다 */
-      uvc_lat_pend.idx         = uvc_pay_written + 1U;
-      uvc_lat_pend.t_cap_start = uvc_frame->t_cap_start;
-      uvc_lat_pend.t_cap_end   = uvc_frame->t_cap_end;
-      uvc_lat_pend.t_enc_end   = uvc_frame->t_enc_end;
-      uvc_lat_pend.t_usb_start = uvc_usb_start;
-      uvc_lat_pend.valid       = 1U;
+      /* 이 페이로드(EOF)가 전송 완료되면 지연을 기록한다. 앞 프레임 기록이 아직 남아 있으면
+         건너뛴다(완료 콜백이 읽는 중에 덮어쓰지 않게, valid는 맨 마지막에 쓴다). */
+      if (uvc_lat_pend.valid == 0U)
+      {
+        uvc_lat_pend.idx         = uvc_pay_written + 1U;
+        uvc_lat_pend.t_cap_start = uvc_frame->t_cap_start;
+        uvc_lat_pend.t_cap_end   = uvc_frame->t_cap_end;
+        uvc_lat_pend.t_enc_end   = uvc_frame->t_enc_end;
+        uvc_lat_pend.t_usb_start = uvc_usb_start;
+        uvc_lat_pend.valid       = 1U;
+      }
       vfq_release(uvc_frame);
       uvc_frame = UX_NULL;
       uvc_frames_sent++;
@@ -560,8 +659,11 @@ static VOID video_write_payload(UX_DEVICE_CLASS_VIDEO_STREAM *stream)
   buffer[0] = (UCHAR)UVC_HDR_LEN;
   buffer[1] = info;
 
+  /* 이 페이로드가 데이터인지 기록해 둔다(전송 간격 통계용) */
+  uvc_written_data[uvc_pay_written % USBD_VIDEO_PAYLOAD_BUFFER_NUMBER] = (chunk != 0U) ? 1U : 0U;
   ux_device_class_video_write_payload_commit(stream, UVC_HDR_LEN + chunk);
   uvc_pay_written++;
+  return (chunk != 0U) ? 1U : 0U;
 }
 
 /**
@@ -573,6 +675,31 @@ static VOID uvc_lat_on_payload_done(VOID)
   uint32_t us[UVC_LAT_NUM];
   uint32_t i;
   UX_INTERRUPT_SAVE_AREA
+
+  /* 데이터 페이로드가 연달아 나갈 때 그 간격을 잰다(마이크로프레임마다 하나가 이상적) */
+  {
+    uint8_t  is_data = uvc_written_data[uvc_pay_done % USBD_VIDEO_PAYLOAD_BUFFER_NUMBER];
+    uint32_t t = vtime_now();
+
+    if (is_data != 0U)
+    {
+      uvc_data_payloads++;
+      if (uvc_last_was_data != 0U)
+      {
+        uint32_t gap = vtime_us(t - uvc_gap_last);
+        if (gap > uvc_gap_max_us)
+        {
+          uvc_gap_max_us = gap;
+        }
+        if (gap > UVC_GAP_LIMIT_US)
+        {
+          uvc_gap_over++;
+        }
+      }
+      uvc_gap_last = t;
+    }
+    uvc_last_was_data = is_data;
+  }
 
   uvc_pay_done++;
   if ((uvc_lat_pend.valid == 0U) || ((int32_t)(uvc_pay_done - uvc_lat_pend.idx) < 0))
@@ -627,13 +754,27 @@ void video_stats_hook(uint32_t period_ms)
     period_ms = 1U;
   }
 
-  printf("UVC: %s %s, sent %lu.%lu fps, empty %lu, skipfrm %lu, isoinc %lu, buferr %lu, getfail %lu\r\n",
+  printf("UVC: %s H264, sent %lu.%lu fps, empty %lu, skipfrm %lu, isoinc %lu, buferr %lu, getfail %lu\r\n",
          (uvc_state == UVC_PLAY_STATUS_STREAMING) ? "streaming" : "stopped",
-         (uvc_format == VFQ_FMT_H264) ? "H264" : "MJPEG",
          (unsigned long)(d * 1000U / period_ms), (unsigned long)((d * 10000U / period_ms) % 10U),
          (unsigned long)uvc_empty_payloads, (unsigned long)uvc_skipped_frames,
          (unsigned long)ux_dcd_stm32_iso_in_incomplete_count,
          (unsigned long)buferr, (unsigned long)uvc_payload_get_fail);
+
+  /* 데이터 페이로드 전송 간격(이상적이면 125 us, 마이크로프레임마다 하나) */
+  {
+    static uint32_t prev_data = 0U;
+    uint32_t dp = uvc_data_payloads;
+    uint32_t over = uvc_gap_over;
+    uint32_t gmax = uvc_gap_max_us;
+
+    uvc_gap_over = 0U;
+    uvc_gap_max_us = 0U;
+    printf("UVCPAY: data %lu/s, gap>%luus %lu, maxgap %lu us\r\n",
+           (unsigned long)((dp - prev_data) * 1000U / period_ms), (unsigned long)UVC_GAP_LIMIT_US,
+           (unsigned long)over, (unsigned long)gmax);
+    prev_data = dp;
+  }
 
   /* 지연(5초 평균/최대, ms 소수 첫째 자리). 출력 후 누적값을 비운다. */
   {
