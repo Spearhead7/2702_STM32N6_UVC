@@ -13,12 +13,13 @@ AHD 카메라 1채널을 받아 **녹화(SD, OSD 없음) + AI 추론 + AHD 출�
 %%{init: {"flowchart": {"rankSpacing": 70, "nodeSpacing": 40}}}%%
 flowchart TB
     subgraph IN[입력]
-        CAM[AHD 카메라] --> DEC["TP2850 / TP2860<br/>AHD 디코더<br/>1080p30 또는 720p30<br/>YUV422"]
+        CAM[AHD 카메라] --> DEC["TP2850<br/>AHD 디코더<br/>1080p30 또는 720p30"]
+        DEC -- "MIPI CSI-2 2레인<br/>YUV422 8비트 (DT 0x1E)" --> CSI["N6 CSI-2 호스트<br/>(D-PHY, 레인당 최대 2.5 Gbps)"]
     end
 
-    DEC --> P0["DCMIPP Pipe0 (dump)<br/>입력 그대로 YUV422<br/>30fps, PSRAM 전체 프레임"]
-    DEC --> P1["DCMIPP Pipe1<br/>NV12, 줄 버퍼(내부 SRAM)<br/>UVC 모드 720p30 / LCD 모드 1080p15"]
-    DEC --> P2["DCMIPP Pipe2<br/>AI 입력 크기로 축소, RGB"]
+    CSI --> P0["DCMIPP Pipe0 (dump)<br/>입력 그대로 YUV422<br/>30fps, PSRAM 전체 프레임"]
+    CSI --> P1["DCMIPP Pipe1<br/>NV12, 줄 버퍼(내부 SRAM)<br/>UVC 모드 720p30 / LCD 모드 1080p15"]
+    CSI --> P2["DCMIPP Pipe2<br/>AI 입력 크기로 축소, RGB"]
 
     subgraph REC[녹화 경로 · OSD 없음]
         P1 -- "하드웨어 핸드셰이크" --> VENC["VENC H.264"]
@@ -29,7 +30,7 @@ flowchart TB
 
     subgraph DISP[표시 경로 · OSD 있음]
         P0 --> L1["LTDC 레이어 1<br/>영상 (YUV422 → RGB)"]
-        L1 --> LTDC["LTDC 합성<br/>RGB 병렬 출력 (7장 H-2)"]
+        L1 --> LTDC["LTDC 합성 + 출력 YUV 변환<br/>YUV422 16비트 (Y=LCD_G, CbCr=LCD_R)<br/>BT.709, HS/VS/DE"]
         OSD["LTDC 레이어 2: OSD<br/>BBox, ROI, 메뉴, 커서<br/>(TouchGFX, ARGB4444/L8)"] --> LTDC
         LTDC --> ENC["TP2912<br/>AHD 출력<br/>입력과 같은 해상도, 30fps"]
     end
@@ -137,13 +138,37 @@ CubeN6 V1.4.1 HAL과 장치 헤더(`stm32n657xx.h`)로 확인한 것이다. 레�
 | Pipe1 | NV12, 줄 버퍼 + 핸드셰이크 | VENC | 1단계에서 검증한 경로. 720p30 ↔ 1080p15 전환 |
 | Pipe2 | 축소 RGB | NPU | AI 입력 크기로 바로 출력 |
 
-- **확인 필요(H-7):** Pipe0이 Pipe1·Pipe2와 같은 입력 스트림을 동시에 받을 수 있는지(CSI 가상 채널·데이터 형식 선택, 병렬 입력일 때도).
+- **확인 필요(H-7):** Pipe0이 Pipe1·Pipe2와 같은 CSI 스트림을 동시에 받을 수 있는지. HAL로는 파이프마다 가상 채널·데이터 형식을 따로 고를 수 있어 가능해 보인다(5.5).
 - 안 될 때 대안: Pipe2를 1080p YUV422 화면용으로 쓰고, AI 입력은 화면 프레임을 GPU2D로 축소(5.2 확인 필요) 또는 CPU로 축소한다.
 
-### 5.4 새로 알게 된 것: LTDC 출력은 RGB
+### 5.4 LTDC 출력: YUV422 16비트 변환 (RM0486 43.4.13)
 
-- N6 LTDC 레지스터(`LTDC_GCR`)에는 YCbCr 출력 설정이 보이지 않는다. 레이어 입력은 YUV를 받아 RGB로 바꾸지만, **출력은 RGB 병렬 + HSYNC/VSYNC/DE** 다.
-- 처음 블록도의 "LTDC 합성 YUV422 16비트 출력"은 그대로는 안 될 가능성이 높다. TP2912가 RGB 입력이나 별도 동기 신호 입력을 받는지 데이터시트로 확인해야 한다(H-2). 안 받으면 RGB → BT.1120 변환이 따로 필요하다.
+- N6 LTDC는 기본 RGB888 24비트 출력을 **YUV422 16비트로 변환해 낼 수 있다**(`LTDC_EDCR`). 사용자가 RM0486 43.4.13 "YUV output conversion"으로 확인(2026-11-14). 처음에 장치 헤더의 `LTDC_GCR`만 보고 "RGB만 출력"이라고 했던 판단은 틀렸다.
+  - `OCYEN`: YUV422 출력 변환 켜기
+  - `OCSEL`: BT.601 / BT.709 선택 → HD(720p/1080p)이므로 **BT.709**
+  - `OCYCO`: Cb와 Cr 중 무엇을 먼저 낼지 → TP2912가 기대하는 순서에 맞춘다
+- 핀: **Y는 LCD_G(8비트), Cb/Cr는 LCD_R(8비트)** 로 나간다. TP2912 16비트 입력에 LCD_G0~7 → Y, LCD_R0~7 → C로 연결하고, 여기에 PCLK·HSYNC·VSYNC·DE를 더한다. LCD_B는 쓰지 않는다.
+- TP2912는 YUV422를 받으므로 이 경로로 연결한다(사용자 확인). 레이어 합성(영상 + OSD)은 RGB로 하고, 마지막 출력 단계에서 YUV로 바뀐다.
+- **확인 필요(H-2)**: LTDC는 동기를 HSYNC/VSYNC/DE 신호로 따로 낸다. 영상 안에 동기 코드(SAV/EAV, BT.1120 내장 동기)를 넣지는 않으므로, TP2912를 **별도 동기 신호 입력 모드**로 설정할 수 있어야 한다. 픽셀 클럭과 타이밍(1080p30·720p30 AHD 규격 타이밍, 74.25 MHz)도 TP2912 요구에 맞춘다(H-3).
+- DK의 LCD(RGB 패널)로 개발할 때는 `OCYEN`을 끄고 RGB로 낸다. 같은 합성 코드를 쓰고 출력 변환 비트만 다르다.
+
+### 5.5 입력: TP2850 MIPI CSI-2 (2026-11-14 결정)
+
+입력은 TP2850의 MIPI CSI-2 출력을 쓴다(TP2860은 쓰지 않음). HAL·장치 헤더로 확인한 것:
+
+| 항목 | 확인 내용 | 판단 |
+| --- | --- | --- |
+| 레인·속도 | N6 CSI-2 호스트는 데이터 레인 1~2개, D-PHY 레인당 80~2500 Mbps (`DCMIPP_CSI_TWO_DATA_LANES`, `DCMIPP_CSI_PHY_BT_2500`) | 1080p30 YUV422 8비트는 AHD 타이밍(2200×1125) 기준 약 1.19 Gbps → 2레인이면 레인당 약 600 Mbps로 여유 있음. **TP2850을 2레인으로 설정**해야 한다(4레인은 N6가 받지 못함) |
+| 데이터 형식 | `DCMIPP_DT_YUV422_8`(0x1E) 지원 | TP2850 출력과 맞음 |
+| 파이프 공유 | 파이프마다 데이터 형식(`P0FSCR`/`P1FSCR`/`P2FSCR`)과 가상 채널(`HAL_DCMIPP_CSI_PIPE_Start`)을 따로 고른다. Pipe2는 기본으로 Pipe1의 데이터를 함께 받는다(`HAL_DCMIPP_PIPE_CSI_EnableShare`) | Pipe0·Pipe1이 같은 가상 채널·YUV422를 고르면 셋 다 같은 입력을 받는 구조로 보인다. 동시 수신은 매뉴얼로 최종 확인(H-7) |
+| Pipe0 출력 | dump 파이프라 형식 변환이 없다 | 받은 YUV422(보통 UYVY 순서) 그대로 저장. LTDC 레이어는 YUV 순서를 설정할 수 있어(`LTDC_YUV_ORDER`) 맞출 수 있음 |
+| Pipe1/Pipe2의 YUV 입력 | ISP의 Bayer 처리는 쓰지 않는다. YUV422 입력을 NV12(Pipe1)·RGB(Pipe2)로 바꾸는 경로는 매뉴얼로 확인(H-9) | 지금 IMX335(RAW)와 설정이 달라지는 부분 |
+
+그 밖에:
+
+- **제어**: TP2850 설정은 I2C로 한다. 지금 IMX335 드라이버 자리를 TP2850 드라이버가 대신한다.
+- **입력 해상도 감지**: TP2850이 들어오는 AHD 형식(1080p30/720p30)을 감지해 상태 레지스터로 알려 준다. 펌웨어가 이를 읽고 파이프라인을 다시 설정한다(3장). 신호가 없으면 OSD에 "신호 없음"을 띄우고 녹화는 멈춘다(정책은 나중에 정함).
+- **DK에서 시험**: DK 카메라 커넥터(MIPI CSI-2 2레인 + I2C + 전원)에 맞는 TP2850 어댑터 보드가 필요하다(H-4).
 
 ## 6. 자원 예산 (가늠, 실측 필요)
 
@@ -168,13 +193,14 @@ CubeN6 V1.4.1 HAL과 장치 헤더(`stm32n657xx.h`)로 확인한 것이다. 레�
 
 | 번호 | 항목 | 왜 |
 | --- | --- | --- |
-| H-1 | TP2850/TP2860 출력이 MIPI CSI-2인지 BT.656/BT.1120 병렬인지 | DCMIPP 입력 설정·핀이 완전히 다르다 |
-| H-2 | TP2912 입력 형식. N6 LTDC 출력은 RGB 병렬 + HS/VS/DE (5.4) | RGB를 받지 못하면 변환 회로가 필요 |
+| H-1 | ~~입력 인터페이스~~ 결정(2026-11-14): TP2850 MIPI CSI-2. TP2850을 2레인·YUV422 8비트로 설정할 수 있는지 데이터시트로 확인 | N6 CSI-2는 최대 2레인 (5.5) |
+| H-2 | TP2912가 별도 HS/VS/DE 동기의 16비트 YUV422(Y·C 분리 버스)를 받는 모드, Cb/Cr 순서 | LTDC YUV 출력은 RM으로 확인됨(5.4). LTDC는 내장 동기 코드를 만들지 않는다 |
 | H-3 | LTDC 픽셀 클럭 74.25 MHz(1080p30/720p60 타이밍) 가능 여부 | AHD 출력 타이밍 |
-| H-4 | DK에서 디코더 보드 연결 방법(MIPI CSI 커넥터 어댑터 등) | 개발 보드 시험 |
+| H-4 | DK 카메라 커넥터에 맞는 TP2850 어댑터 보드(CSI-2 2레인, I2C, 전원·리셋 핀) | 개발 보드 시험 |
 | H-5 | 태블릿과 마우스를 USB1 하나로 할지, USB2를 따로 쓸지 | 태블릿 연결 중 마우스 사용 여부 |
 | H-6 | DK에서 USB1이 VBUS 5 V를 낼 수 있는지 실제 확인 | 마우스 전원 (BSP에는 Source 기능이 있음) |
-| H-7 | Pipe0이 Pipe1·Pipe2와 같은 입력을 동시에 받는지, Pipe0 출력 형식 | 5.3 파이프 배치의 전제 |
+| H-7 | Pipe0이 Pipe1·Pipe2와 같은 CSI 가상 채널을 동시에 받는지 (HAL상 가능해 보임) | 5.3 파이프 배치의 전제 |
+| H-9 | Pipe1·Pipe2가 YUV422 CSI 입력을 NV12·RGB로 바꾸는 설정 | 5.5 |
 | H-8 | VENC 하드웨어 핸드셰이크가 Pipe1 전용인지 | 5.1 (지금 배치는 Pipe1만 쓰므로 영향 없음, 참고) |
 | S-1 | PSRAM 대역폭 실측 (6장) | 동시 동작의 가장 큰 위험 |
 | S-2 | st_yoloxn 입력 크기와 Pipe2 축소·letterbox | AI 정확도·속도 |
@@ -187,7 +213,7 @@ CubeN6 V1.4.1 HAL과 장치 헤더(`stm32n657xx.h`)로 확인한 것이다. 레�
 
 | 지금 | 구상 |
 | --- | --- |
-| IMX335 + ISP(AE/AWB) | AHD 디코더 YUV 입력, ISP 불필요. `cam ae/exp/gain/awb` 설정은 없어지거나 디코더 설정으로 바뀜 |
+| IMX335 + ISP(AE/AWB) | TP2850 MIPI CSI-2 YUV422 입력, ISP 불필요. `cam ae/exp/gain/awb` 설정은 없어지거나 디코더 설정으로 바뀜 |
 | 720p30 고정 | 입력(1080p30/720p30)과 모드를 따라감 |
 | Pipe1 하나 | Pipe0 화면, Pipe1 인코딩, Pipe2 AI |
 | CDC 텍스트 CLI | CDC는 바이너리 프로토콜 전용, CLI는 UART |
