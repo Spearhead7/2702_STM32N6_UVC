@@ -277,7 +277,7 @@ static void cmd_help(void)
   out_str("  help [group]   show commands of a group\r\n");
   out_str("  version        firmware version\r\n");
   out_str("  status         stream / encoder / camera status\r\n");
-  out_str("  reboot         software reset (dev mode: board stops, re-run from debugger)\r\n");
+  out_str("  reboot [m]     reset, m = wdg (default) | sys | warm\r\n");
   out_str("groups:");
   for (i = 0U; i < settings_count(); i++)
   {
@@ -357,12 +357,60 @@ static void cmd_status(void)
   out_ok();
 }
 
-static void cmd_reboot(void)
+/* reboot [wdg|sys|warm] (M6 진단: 리셋 방식별로 부트 ROM이 다시 부팅하는지 본다)
+   wdg (기본): IWDG 리셋. 시스템 전체 리셋. LSI 32 kHz, /4, 2틱 ≈ 0.25 ms.
+   sys       : SYSCFG CM55RSTCR CORE_RESET_TYPE = 1 + NVIC_SystemReset().
+   warm      : NVIC_SystemReset()만(N6 기본값은 코어만 다시 시작하는 warm reset). */
+static void cmd_reboot(const char *mode)
 {
-  out_str("rebooting...\r\n");
+  uint32_t m;
+
+  if ((mode == NULL) || str_eq(mode, "wdg"))
+  {
+    m = 0U;
+  }
+  else if (str_eq(mode, "sys"))
+  {
+    m = 1U;
+  }
+  else if (str_eq(mode, "warm"))
+  {
+    m = 2U;
+  }
+  else
+  {
+    out_error("mode must be wdg, sys or warm");
+    return;
+  }
+
+  out_printf("rebooting (%s)...\r\n", (m == 0U) ? "wdg" : ((m == 1U) ? "sys" : "warm"));
   out_ok();
   out_flush();
   tx_thread_sleep((100U * TX_TIMER_TICKS_PER_SECOND / 1000U) + 1U);
+  __disable_irq();
+  /* POR로만 초기화되는 PSRAM 패드 전압 범위를 되돌린다(이 뒤로 PSRAM 접근 금지, main.c) */
+  board_prepare_reset();
+
+  if (m == 0U)
+  {
+    IWDG->KR  = 0xCCCCU;   /* 시작(LSI도 함께 켜진다) */
+    IWDG->KR  = 0x5555U;   /* PR·RLR 쓰기 허용 */
+    IWDG->PR  = 0U;
+    IWDG->RLR = 1U;
+    while (IWDG->SR != 0U)
+    {
+    }
+    IWDG->KR  = 0xAAAAU;   /* 새 값으로 다시 적재 */
+    while (1)
+    {
+    }
+  }
+  if (m == 1U)
+  {
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    HAL_SYSCFG_EnablePowerOnReset();
+    __DSB();
+  }
   NVIC_SystemReset();
 }
 
@@ -469,9 +517,9 @@ static void cli_execute(char *line)
     cmd_status();
     return;
   }
-  if (str_eq(argv[0], "reboot") && (argc == 1U))
+  if (str_eq(argv[0], "reboot") && (argc <= 2U))
   {
-    cmd_reboot();
+    cmd_reboot((argc == 2U) ? argv[1] : NULL);
     return;
   }
   if ((argc == 2U) && str_eq(argv[0], "enc") && str_eq(argv[1], "idr"))

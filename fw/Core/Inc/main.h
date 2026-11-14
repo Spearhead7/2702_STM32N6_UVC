@@ -87,6 +87,9 @@ void Error_Handler(void);
 /* USER CODE BEGIN EFP */
 void MX_USB1_OTG_HS_PCD_Init(void);
 void MX_USART1_UART_Init(void);
+/* 소프트웨어 리셋 직전에 부른다(인터럽트를 끈 뒤). 부트 ROM이 리셋 뒤 멈추지 않게 POR로만
+   초기화되는 설정을 되돌린다. 부른 뒤에는 PSRAM에 접근하면 안 된다. */
+void board_prepare_reset(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

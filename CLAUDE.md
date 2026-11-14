@@ -51,6 +51,8 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 
 서명: `STM32_SigningTool_CLI.exe -bin <app>.bin -nk -of 0x80000000 -t fsbl -o <app>-trusted.bin -hv 2.3 -align` (CubeProgrammer 2.21 이상은 `-align` 필요). 굽기는 사용자가 한다.
 
+플래시 부팅(M6): 앱 하나를 FSBL로 서명해 외부 NOR 0x70000000에 굽는다(부트 ROM이 AXISRAM2로 복사, 한도 511 KB). `tools/flash.ps1`(기본 Debug, `-Config Release`, `-NoFlash`)이 서명 + 굽기를 한다. 굽기 전 BOOT1 1-3(개발 모드, 스위치 핀 순서는 2-1-3), 굽고 나서 BOOT0·BOOT1 1-2로 바꾸고 전원을 다시 넣는다.
+
 ## 현재 상태
 - 보드 MB1939-N6570-C02, 카메라 MB1854B, USB1 = CN18.
 - M1: 예제 3개 모두 Windows PC에서 동작 확인. 태블릿 UVC 뷰어 확인과 기종·앱 이름 기록(PRD 10장)은 사용자가 나중에 한다.

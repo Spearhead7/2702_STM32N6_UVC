@@ -441,3 +441,55 @@ MJPEG 삭제(M4-7, PRD F-02/F-08):
 - 함께 바꾼 것: 읽기·쓰기 타임아웃 ioctl 제거(읽기는 M2~M4 에코처럼 계속 기다림). DTR 상승은 `USBD_CDC_ACM_ParameterChange`(SET_CONTROL_LINE_STATE)에서 세마포어로 알리고 배너 스레드(우선순위 20, 스택 1 KB)가 50 ms 뒤 배너를 보냄. `cli_banner()`는 자기 버퍼로 바로 쓰고, 입력 중이던 줄은 다음 `cli_input`에서 버림. 빌드 오류 0.
 - **M5 완료**(2026-11-14, 사용자 보드 확인): ffplay H.264 재생 중 Tera Term(CDC)에서 배너, `help`/`help cam`/`help enc`, `status`, `cam ae off` + `cam exp 3000`(어두워짐) → `cam ae on`, `cam awb off/on`, `enc bitrate 2000`(USART1 `VIDEO: encoder restarted`, 영상 복귀) → 4000, `enc idr`, `log level 1`, 오류(`enc bitrate 9000`, 알 수 없는 명령) 모두 정상.
 - 참고: 시험 중 ffplay가 한 번 안 열렸는데 다시 실행하니 정상(카메라를 다른 앱이 잡고 있던 경우로 봄).
+
+## M6 안정화와 검증
+
+### 2026-11-14 플래시 부팅 1차: 앱 하나를 FSBL로 (Claude)
+
+- 조사: 지금 앱은 이미 FSBL용 링커 배치(AXISRAM2 0x34180400~, ROM 383K + RAM 128K = 511K)로 빌드된다. 부트 ROM은 서명된 FSBL을 외부 NOR 0x70000000에서 0x34180400으로 복사해 실행하므로, **앱을 그대로 `-t fsbl`로 서명해 0x70000000에 구우면 플래시 부팅이 된다.** 코드 변경 없음.
+  - 디버거 실행 설정(`STM32N6_UVC Debug.launch`)에 초기화 명령이 없고, 앱 소스에 `DEBUG` 조건 코드도 없다. 클럭·캐시·MPU·PSRAM은 앱이 직접 켠다.
+  - 크기: Debug bin 360 KB, Release bin 251 KB(서명 후 +1 KB 헤더). 한도 511 KB.
+  - 줄 버퍼(`.linebuf_bss`, 0x34100000~)와 USBX·비캐시 영역은 NOLOAD라 이미지에 들어가지 않는다. 부트 ROM이 쓰던 SRAM은 앱 시작 뒤에는 쓰이지 않으므로 그대로 둔다.
+- 비교: x-cube-n6-ai-h264-usb-uvc는 미리 빌드된 FSBL(`ai_fsbl.hex`, 소스 없음) + 앱(`-t ssbl`, 0x70100000, AXISRAM1+2 1.7 MB에 복사)이다. Ux_Device_Video도 FSBL + 앱(LRUN) 구조다.
+- **결정**: 지금은 앱 하나 FSBL 구조로 간다. 코드가 511 KB에 가까워지면(3단계 TouchGFX, 5단계 AI 런타임 예상) FSBL + 앱 구조(Ux_Device_Video FSBL 소스 기반, 앱은 0x70100000 → AXISRAM1+2)로 바꾸고 줄 버퍼 위치를 다시 정한다.
+- 도구: `tools/flash.ps1` — 서명(`-t fsbl -hv 2.3 -align`) + CubeProgrammer CLI로 0x70000000에 굽기(외부 로더 `MX66UW1G45G_STM32N6570-DK.stldr`). 기본은 Debug, `-Config Release`, `-NoFlash`(서명만).
+- 보드 확인 필요: Release 빌드는 아직 보드에서 돌려 본 적이 없다. Debug로 플래시 부팅을 먼저 확인하고 Release를 확인한다.
+- 부트 스위치(사용자 확인): DK 스위치 핀 순서가 2-1-3이라 고를 수 있는 것은 1-2와 1-3뿐이다. **개발 모드 = BOOT1 1-3**(Ux_Device_Video README 표기가 맞음, M1 때 적은 "2-3"은 다른 예제 README의 표기), **플래시 부팅 = BOOT0 1-2 + BOOT1 1-2**.
+- **보드 확인 1차(사용자, Debug 플래시 부팅)**: 전원만으로 부팅, USART1 배너·`VIDEO:` 통계 정상, PC ffplay·노트20(ShenYao) 영상 정상. **`reboot` 후 멈춤**(USB 인식 안 됨, USART1 출력 없음).
+- 원인(추정, HAL·레지스터 정의 기준): N6의 `SYSCFG->CM55RSTCR.CORE_RESET_TYPE` 기본값 0은 SYSRESETREQ(`NVIC_SystemReset()`)가 **코어만** 다시 시작하는 warm reset이다. USB·DCMIPP·VENC·XSPI·PLL은 켜진 채로 부트 ROM이 다시 돌다가 멈춘 것으로 본다. 출력이 전혀 없으니 앱(HardFault 출력)까지 가지 못했다.
+- 수정: `cmd_reboot()`에서 인터럽트를 끄고 SYSCFG 클럭을 켠 뒤 `HAL_SYSCFG_EnablePowerOnReset()`(CORE_RESET_TYPE = 1, 시스템 전체 리셋)를 하고 `NVIC_SystemReset()`. help 문구 수정. 빌드 오류 0.
+- 보드 확인 2차(사용자): CORE_RESET_TYPE = 1 수정본도 `reboot` 뒤 멈춤. **리셋 버튼(NRST)도 똑같이 멈추고, 전원을 완전히 뺐다 넣어야만 부팅된다.** ST-LINK hot-plug 연결도 안 됨(플래시 부팅에서는 디버그 포트가 열려 있지 않은 것으로 봄).
+  - 결론: 시스템 리셋으로 지워지지 않고 전원을 꺼야(POR) 지워지는 상태가 원인이다. 후보는 PWR(전원 공급·VOS·VDDIO 설정), POR에서만 초기화되는 RCC 클럭 설정, 리셋 핀이 NRST에 연결되지 않은 외부 칩(NOR 플래시, PSRAM)의 상태.
+  - 리셋 버튼에서도 멈추면 나중에 워치독 리셋에서도 살아나지 못하므로 M6에서 반드시 해결한다.
+  - `reboot`는 IWDG 리셋(시스템 전체 리셋)으로 바꿨다. 위 결론대로라면 이것만으로는 해결되지 않는다.
+- 진단: `main.c`에 LED 표시(`diag_led`) 추가. 둘 다 꺼짐 = 부트 ROM, 초록+빨강 = SystemClock_Config, 초록만(배너 없음) = 주변장치 초기화, 빨강만 = PSRAM 초기화, 초록만(배너 있음) = ThreadX까지, 빨강 깜빡임 = Error_Handler.
+- 보드 확인 3차(사용자, LED 진단): 리셋 버튼 뒤 **LED 둘 다 꺼짐 = 앱이 시작되지 않고 부트 ROM에서 멈춤.**
+  - 앱이 바꾸는 것 중 리셋으로 지워지지 않는 것: `HAL_PWREx_ConfigSupply(PWR_EXTERNAL_SOURCE_SUPPLY)`(내부 SMPS 끔, "POR 뒤 한 번만 쓸 수 있고 VDD POR로만 초기화", HAL 주석), VDDIO2 1.8 V 범위(PSRAM 쪽, NOR는 VDDIO3라 무관), VOS.
+  - x-cube-n6-camera-capture(같은 DK, 앱 하나 FSBL)는 `ConfigSupply`를 부르지 않고 외부 SMPS 핀(`BSP_SMPS_Init`)만 쓴다.
+  - 시험: `SystemClock_Config()`에서 `ConfigSupply` 호출을 뺐다(`#if 0`). 시험 전에 전원을 완전히 빼서 이전 설정을 지워야 한다.
+- 보드 확인 4차(사용자, ConfigSupply 뺀 이미지): **첫 번째 `reboot`(IWDG)는 다시 부팅, 그다음 실행에서 다시 `reboot`하면 멈춤.** SMPS 설정이 원인의 하나였고, 리셋을 거친 뒤 다른 상태가 남는 것으로 본다.
+- 진단 추가: 배너 다음 줄에 `RESET: RSR 0x... POR/PIN/SFT/IWDG/...`(리셋 원인) 출력 후 플래그 지움. `reboot [wdg|sys|warm]`으로 리셋 방식을 골라 시험(기본 wdg).
+- 보드 확인 5차(사용자, 리셋 플래그를 지우는 이미지): `reboot wdg` 첫 번째부터 멈춤, 리셋 버튼도 첫 번째부터 멈춤. **리셋 플래그를 지우느냐에 따라 결과가 바뀐다**(지우지 않던 이미지는 첫 리셋이 됐다). 부트 ROM이 RSR로 전원 부팅과 리셋 부팅을 구분하고 리셋 쪽 경로에서 멈추는 것으로 본다.
+- 진단 이미지: 리셋 플래그를 지우지 않음. main 진입 직후 값(RSR, PWR CR1·VOSCR·SVMCR3, RCC CR·SR·CFGR1·PLL1CFGR1·IC1CFGR·DIVENR·AHB5ENR·CCIPR6)을 `RESET:`/`BOOT:` 줄로 출력해 전원 부팅과 리셋 부팅을 비교한다.
+- 보드 확인 6차(사용자): `reboot sys` 첫 번째에 멈춤. 전원 부팅 로그(main 진입 직후 = 부트 ROM이 넘겨준 상태):
+  `RSR 0x00e00000 POR BOR PIN`, `PWR CR1 00000020 VOSCR 00020002`, `RCC CR 00000109 CFGR1 33330000 PLL1 00404b00 IC1 00020000 DIVENR 00000423 CCIPR6 00000001`.
+  - 해석: PWR CR1 SDEN(bit 2) = 0 → 부트 ROM이 이미 외부 전원 설정을 해 둔다. 따라서 `ConfigSupply(EXTERNAL)`는 같은 값을 쓴 것이고 원인이 아니었다(4차의 "첫 reboot 성공"은 리셋 방식이 IWDG였기 때문으로 본다).
+  - 부트 ROM은 HSI·LSI·PLL1을 켜 두고(PLL1 = HSI 64 MHz / 4 × 75 = 1200 MHz), CPU를 IC1(/3 = 400 MHz), 시스템 버스를 IC2/6/11로 넘겨준다. 앱은 PLL1을 HSE(48 MHz / 3 × 75) 소스로 바꾸고 CPU 600 MHz로 올린다.
+  - 정리: SYSRESETREQ(sys)는 첫 번째부터, IWDG는 두 번째에, PIN(리셋 버튼)은 플래그를 지우면 첫 번째부터 멈춤.
+- 보드 확인 7차(사용자): 전원을 껐다 켠 뒤 `reboot wdg`도 첫 번째에 멈춤. → 리셋 방식과 상관없이 POR이 아닌 리셋 뒤에는 부트 ROM에서 멈춘다(4차의 첫 reboot 성공은 재현되지 않음).
+- 분할 시험: `Core/Inc/m6_reset_test.h`의 `M6_RESET_TEST`(기본 0)를 1~4로 빌드하면 그 단계 직후 약 2초 뒤 IWDG로 스스로 리셋을 반복한다(1 main 진입 직후, 2 SystemClock_Config 뒤, 3 주변장치 초기화 뒤, 4 PSRAM 뒤). 다시 부팅하면 초록 LED가 계속 깜빡이고, 멈추면 꺼진 채로 있다. 이미지는 `fw/Debug/reset_test_N-trusted.bin`, 굽기는 `tools/flash.ps1 -Image`.
+- 분할 시험 결과(사용자): 1·2·3 계속 깜빡임(리셋 뒤 정상 부팅), **4(PSRAM 초기화 뒤) 한 번 뒤 멈춤 → 원인은 PSRAM 초기화.**
+  - BSP `BSP_XSPI_RAM_Init`: MSP에서 VDDIO2 1.8 V 범위(PWR, POR로만 초기화), XSPI1 설정, 칩 MR0=0x30·MR4=0x20(지연 7)·MR8=0x40(x16 모드). PSRAM 칩은 보드 리셋과 무관하게 이 모드를 유지한다.
+  - 세부 분할 이미지: 5 = VDDIO2 범위만, 6 = 칩 설정까지(memory-mapped 전), 7 = 초기화 뒤 칩 Global Reset 후 리셋, 8 = 7 + VDDIO2 범위 3.3 V로 되돌림.
+- 세부 분할 결과(사용자): **5(VDDIO2 1.8 V 범위만) 한 번 뒤 멈춤 → 원인은 PSRAM 쪽 IO 전압 범위(PWR SVMCR3 VDDIO2VRSEL).** 이 비트는 POR로만 초기화된다. 전원 부팅 때 부트 ROM이 넘겨준 SVMCR3는 0x00101310(VRSEL 모두 0 = 3.3 V 범위).
+  - ST 예제(Ux_Device_Video FSBL) 기준 OTP 124: bit 15 = HSLV_VDDIO3 = XSPIM Port 2(NOR, XSPI2), bit 16 = HSLV_VDDIO2 = Port 1(PSRAM, XSPI1). BSP도 NOR MSP는 VDDIO3, RAM MSP는 VDDIO2를 1.8 V 범위로 둔다. **M3 이후 PSRAM 속도를 정할 때 NOR 쪽 bit 15를 읽은 것은 잘못**이었다.
+  - HAL: 1.8 V 범위는 해당 HSLV 퓨즈가 켜져 있어야 한다. 퓨즈 없이 1.8 V 범위로 둔 상태가 리셋 뒤 남아 부트 ROM을 멈추게 한 것으로 본다.
+- 수정(후보): PSRAM은 bit 16(HSLV_VDDIO2)으로 판단. 퓨즈가 없으면 `BSP_XSPI_RAM_Init` 직후 VDDIO2를 3.3 V 범위로 되돌리고 XSPI1을 100 MHz로. 부팅 로그에 두 퓨즈 상태를 출력.
+- 보드 확인(사용자, 퓨즈 판단 수정본): `HSLV fuse VDDIO2(PSRAM) set, VDDIO3(NOR) set`, PSRAM 200 MHz OK, ffplay 정상, **`reboot` 첫 번째에 멈춤.** 퓨즈가 켜져 있어도 VDDIO2VRSEL = 1이 남으면 리셋 뒤 부트 ROM이 멈춘다("퓨즈 없이 1.8 V" 설명은 틀림).
+- 수정(후보 2): `BSP_XSPI_RAM_Init` 직후 VDDIO2를 항상 3.3 V 범위로 되돌린다(부트 ROM이 넘겨주는 값과 같게). 3.3 V 범위에서 200 MHz가 안정적인지 앞 4 MB 주소 패턴 시험 결과와 VDDIO2 범위를 부팅 로그에 출력.
+- 보드 확인(사용자, 후보 2): `HSLV fuse` 줄 다음에서 멈춤 → **VDDIO2 3.3 V 범위 + XSPI1 200 MHz에서는 PSRAM 접근이 끝나지 않는다.**
+- 수정(후보 3): VDDIO2 3.3 V 범위 + XSPI1 100 MHz(IC3 /12). 이론 400 MB/s로 지금 영상(약 120 MB/s)에는 충분하다. 3단계 이후 대역폭이 모자라면 대안: 1.8 V 범위·200 MHz로 쓰고, 소프트웨어 리셋 직전과 IWDG early wakeup 인터럽트에서 VDDIO2를 3.3 V 범위로 되돌린다(리셋 버튼은 대응 못 함).
+- 보드 확인(사용자, 후보 3): 100 MHz에서도 `HSLV fuse` 줄 다음에서 멈춤 → **PSRAM은 VDDIO2 1.8 V 범위에서만 동작한다.**
+- 수정(후보 4): VDDIO2는 1.8 V 범위·200 MHz로 원래대로 두고, `board_prepare_reset()`(main.c)이 리셋 직전에 3.3 V 범위로 되돌린다. `reboot`은 인터럽트를 끈 뒤 이 함수를 부르고 바로 리셋한다(이후 PSRAM 접근 금지). 리셋 버튼(NRST)은 대응할 수 없어 여전히 전원을 다시 넣어야 한다. IWDG(24시간 시험용 워치독)는 early wakeup 인터럽트에서 같은 처리를 할 예정.
+- 보드 확인(사용자, 후보 4): PSRAM 200 MHz·1.8 V 범위·4 MB 시험 오류 0, ffplay 정상. **`reboot`(리셋 직전 VDDIO2 3.3 V 복원) 뒤에도 멈춤.** 분할 시험 8(PSRAM 칩 Global Reset + VDDIO2 복원 후 리셋)도 동작하지 않음.
+- 현재 결론: 플래시 부팅(전원 투입)은 정상. 리셋(버튼·reboot·IWDG) 뒤 부트 ROM이 멈추는 문제는 PSRAM VDDIO2 1.8 V 범위 설정에서 시작되지만, 리셋 직전 복원으로는 해결되지 않음(원인 미확정). DK에서는 전원을 다시 넣어 대응한다. 워치독(24시간 시험)과 커스텀 보드 전에 다시 본다(ST 부트 ROM 리셋 동작 자료 확인, 커스텀 보드는 외부 감시 칩으로 전원 재투입도 검토).
