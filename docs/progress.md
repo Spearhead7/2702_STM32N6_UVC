@@ -406,11 +406,38 @@ MJPEG 삭제(M4-7, PRD F-02/F-08):
 
 - 스톱워치 폰 화면과 노트20(ShenYao USB Camera) 화면을 한 사진에: 130 / 260 / 130 ms(평균 약 170 ms) → 목표 100 ms 초과.
 - 장치 내부 27.6 ms + 센서 노출(최대 약 33 ms) + 화면 표시(약 17~33 ms)를 빼면 약 80~200 ms가 폰 앱 디코딩 버퍼로 추정. 인코더는 SPS VUI에 bitstream_restriction(재정렬 없음)을 이미 넣는다.
-- 사용자 결정: 지연 후속은 나중에. 할 일: PC에서 `ffplay -f dshow -vcodec h264 -fflags nobuffer -flags low_delay -framedrop`로 같은 측정을 해 보드/앱 구간 분리, 다른 UVC 뷰어 앱 비교.
+- 사용자 결정: 지연 후속은 나중에. 할 일: PC에서 `ffplay -fflags nobuffer -flags low_delay -framedrop -f dshow -vcodec h264 -video_size 1280x720 -framerate 30 -rtbufsize 64M -i video="STM32N6 UVC CDC"`로 같은 측정을 해 보드/앱 구간 분리, 다른 UVC 뷰어 앱 비교.
 - 화질 메모: 화면이 실제보다 약간 보랏빛(AWB 확인 필요).
 
 ### 2026-11-14 PC에서 H.264 UVC + CDC 동시 확인 (사용자)
 
-- Windows PC에서 `ffplay -f dshow -vcodec h264 -fflags nobuffer -flags low_delay -framedrop -i video="STM32N6 UVC CDC"`(ffmpeg gyan.dev essentials)로 H.264 영상 재생, 동시에 Tera Term(CN18 USB CDC 포트) 에코 정상.
+- Windows PC에서 `ffplay -fflags nobuffer -flags low_delay -framedrop -f dshow -vcodec h264 -video_size 1280x720 -framerate 30 -rtbufsize 64M -i video="STM32N6 UVC CDC"`(ffmpeg gyan.dev essentials)로 H.264 영상 재생, 동시에 Tera Term(CN18 USB CDC 포트) 에코 정상.
 - 처음에 ffplay가 `vq=0KB`로 멈춘 것은 다른 프로그램이 카메라를 잡고 있었기 때문(모두 닫고 다시 실행하니 정상).
 - H.264만 남은 뒤 Windows 기본 카메라 앱은 형식을 못 고르므로 PC 확인은 ffplay(또는 OBS '비디오 캡처 장치' 형식 H264)로 한다.
+
+### 2026-11-14 M4 정리 (사용자 결정)
+
+- 화질 튜닝(보랏빛 색감, AWB)과 전체 지연(노트20 약 170 ms, PC ffplay로 구간 분리) 후속은 나중에 한다.
+- 그 외 M4 항목(H.264 720p30, 장치 내부 지연 50 ms 이하, MJPEG 삭제, 노트20·PC 동작, 영상 중 CDC 에코)은 확인 완료.
+
+## M5 CDC CLI
+
+### 2026-11-14 CLI 구현 (Claude, 사용자 지시 "CLI구현해줘")
+
+- 새 폴더 `fw/App/`(include `../App/Inc`를 `.cproject` Debug/Release에 추가):
+  - `settings.c/.h`: 설정 항목 테이블. cam ae/exp/gain/awb, enc bitrate/gop, log level. 값은 정수(게인은 0.1 dB 단위, decimals 1). 범위 검사는 테이블 min/max.
+  - `cli.c/.h`: 줄 편집(에코, CR/LF/CRLF, Backspace·DEL, Ctrl+C, ESC 시퀀스 무시, 128자), 토큰 나누기, 내장 명령 help/version/status/reboot/enc idr, 나머지는 테이블. 출력은 512 B 버퍼에 모아 한 번에 보낸다. 마지막 줄은 `OK` 또는 `ERROR: ...`.
+  - `app_log.h`(log level, 기본 3), `app_version.h`(0.5.0).
+- CDC: 에코 스레드를 CLI 스레드로 교체(우선순위 20, 스택 4 KB, 일반 RAM 정적 배열, USBX 풀에서 2 KB 반환). 읽기 타임아웃 100 ms로 깨어 DTR 0→1이면 배너+프롬프트, 쓰기 타임아웃 200 ms(포트가 닫혀 있어도 막히지 않게).
+- video_app: 카메라 제어 API(`video_cam_get/set_ae/awb/exposure/gain`), ISP 뮤텍스(isp 스레드의 `BSP_CAMERA_BackgroundProcess`와 CLI 사이). 수동 노출·게인은 AE가 꺼져 있을 때만(아니면 `auto mode is on`). AWB off는 `ISP_GetWBRefMode`의 현재 색온도로 고정. 노출·게인은 ISP 핸들의 appliHelpers(BSP 헬퍼, 캐시값 함께 갱신)로 읽고 쓴다.
+- 인코더: VENC는 HRD를 켠 채 실행 중 `H264EncSetRateCtrl`을 거부(`H264ENC_INVALID_STATUS`, encStatus START_FRAME + hrd)하므로, `enc bitrate/gop`은 `video_cfg`를 바꾸고 요청 플래그만 세운다. 영상 스레드가 프레임 끝에서 `video_encoder_restart()`(DCMIPP 일시정지 → VENC 리셋 → 인코더 재생성, desync 복구와 같은 함수)로 반영. USART1에 `VIDEO: encoder restarted, N kbps gop M`.
+- status: VIDEO 통계 주기(5초) 평균을 `video_app_live()`(cap/enc fps, 실제 kbps), UVC는 `uvc_status_get()`(streaming, 보낸 fps, wait-idr, isoinc, buferr, 장치 내부 지연 평균/최대). 통계 계산은 로그 레벨과 무관하게 하고 출력만 레벨로 거른다(1 VIDEO, 2 +UVC, 3 +UVCPAY·LAT).
+- reboot: `NVIC_SystemReset()`. 개발 모드(디버거로 SRAM 실행)에서는 리셋 후 보드가 멈춘다(M6 플래시 부팅부터 정상).
+- PRD 7장: status 예시(41.2 Mbps 오타) 수정, 명령 범위·제약, 로그는 USART1(CDC 비동기 로그 없음), 구현 위치 추가.
+- 빌드: Debug/Release 오류 0, 경고는 VideoEncoder 107개뿐. Debug ROM 약 358 KB/383 KB, 내부 RAM 일반 영역 약 55 KB/64 KB(비캐시 54.5 KB/64 KB).
+- 보드 1차 확인: 배너·프롬프트·입력 에코는 나오지만 `help` Enter 뒤 멈춤. USART1 임시 디버그로 보니 명령 실행은 끝났고(출력 269 B) 그 뒤 CDC 쓰기(276 B)가 돌아오지 않음.
+- 원인: CDC data IN(0x81) Tx FIFO가 0x40 word = 256 B(`usb_otg.c`, 영상 EP에 FIFO 대부분을 줌)인데 HS bulk 패킷은 최대 512 B. 256 B를 넘는 패킷은 FIFO에 다 들어가지 않아 전송이 끝나지 않는다. 1 B 에코·약 90 B 배너는 정상이라 M2~M4 에코 시험에서는 드러나지 않았다.
+- 수정: `cdc_cli_write()`가 256 B 이하로 나눠 보낸다(각각 짧은 패킷 하나). 영상 FIFO(0x280)는 건드리지 않음.
+- 함께 바꾼 것: 읽기·쓰기 타임아웃 ioctl 제거(읽기는 M2~M4 에코처럼 계속 기다림). DTR 상승은 `USBD_CDC_ACM_ParameterChange`(SET_CONTROL_LINE_STATE)에서 세마포어로 알리고 배너 스레드(우선순위 20, 스택 1 KB)가 50 ms 뒤 배너를 보냄. `cli_banner()`는 자기 버퍼로 바로 쓰고, 입력 중이던 줄은 다음 `cli_input`에서 버림. 빌드 오류 0.
+- **M5 완료**(2026-11-14, 사용자 보드 확인): ffplay H.264 재생 중 Tera Term(CDC)에서 배너, `help`/`help cam`/`help enc`, `status`, `cam ae off` + `cam exp 3000`(어두워짐) → `cam ae on`, `cam awb off/on`, `enc bitrate 2000`(USART1 `VIDEO: encoder restarted`, 영상 복귀) → 4000, `enc idr`, `log level 1`, 오류(`enc bitrate 9000`, 알 수 없는 명령) 모두 정상.
+- 참고: 시험 중 ffplay가 한 번 안 열렸는데 다시 실행하니 정상(카메라를 다른 앱이 잡고 있던 경우로 봄).

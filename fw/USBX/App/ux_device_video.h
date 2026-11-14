@@ -64,7 +64,20 @@ ULONG USBD_VIDEO_StreamGetMaxPayloadBufferSize(VOID);
 UINT  USBD_VIDEO_FillThreadInit(VOID);
 
 /* USER CODE BEGIN EFP */
+/* CLI status 명령용 UVC 상태. fps·지연은 통계 주기(5초) 평균 */
+typedef struct
+{
+  uint8_t  streaming;      /* 호스트가 영상을 열었는지 */
+  uint32_t sent_fps_x10;   /* 보낸 프레임 fps × 10 */
+  uint32_t skipped;        /* 키프레임 대기로 건너뛴 프레임(누적) */
+  uint32_t isoinc;         /* isochronous IN incomplete(누적, 패킷 손실 의심) */
+  uint32_t buferr;         /* USBX 영상 버퍼 오류(누적) */
+  uint32_t lat_valid;      /* 지연 값이 있는지(스트리밍 중 한 주기 이상) */
+  uint32_t lat_avg_us;     /* 장치 내부 지연(캡처 시작 → USB 전송 완료) 평균 */
+  uint32_t lat_max_us;
+} uvc_status_t;
 
+void uvc_status_get(uvc_status_t *st);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

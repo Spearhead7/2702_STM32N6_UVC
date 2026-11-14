@@ -52,6 +52,8 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 - **M4 진행**(2026-11-13): M4-2 H.264 인코더(VideoEncoder h264 소스, Debug에서도 이 폴더만 -Os), M4-3 UVC에 MJPEG(형식 1) + H.264 frame-based(형식 2), Commit 형식으로 인코더 전환, M4-5 갤럭시 노트20(Android 13) + ShenYao USB Camera 12.3.2에서 MJPEG·H.264 모두 재생 → M4-4(UVC 1.5)는 생략. H.264 장치 내부 지연 평균 약 51 ms / 최대 약 68 ms(IDR). 다음은 M4-6 지연·화질. Windows 카메라 앱은 MJPEG를 고르므로 H.264 확인은 ffmpeg `-vcodec h264 ... -c copy -copyinkf`로 녹화.
 - **M4-6/M4-7**(2026-11-13): 1차(HCLK 200 MHz, UVC zero-copy·채우기 스레드)로 USB 구간 해결, 장치 내부 평균 49 ms / 최대 52 ms. 2차로 DCMIPP–VENC 하드웨어 핸드셰이크(NV12 64줄 줄 버퍼, AXISRAM2 아래쪽 `.linebuf_bss`)와 MJPEG 영구 삭제(UVC 형식은 H.264 frame-based 하나). 보드에서 장치 내부 평균 27.6 ms / 최대 31 ms 확인.
 - **노트20 연결 수정**(2026-11-14): PD 스택의 Error Recovery 요청은 무시(`usbpd_dpm_user.c`, 보드는 PD 계약 불필요), CC detach로 USB를 끄지 않음, `VDD_VALUE` 1800(ADC 기준 1.8 V, VBUS 측정용), 카메라 초기화 최대 3회 재시도. 실행 후 연결·연결한 채 실행·다시 꽂기 모두 영상 확인. 자세한 내용은 `docs/progress.md`.
+- **M4 정리**(2026-11-14): PC ffplay H.264 + CDC 에코 동시 확인. 화질 튜닝(보랏빛, AWB)과 전체 지연(노트20 약 170 ms, 폰 앱 버퍼 추정) 후속은 나중에. PC 확인은 `ffplay -fflags nobuffer -flags low_delay -framedrop -f dshow -vcodec h264 -video_size 1280x720 -framerate 30 -rtbufsize 64M -i video="STM32N6 UVC CDC"`.
+- **M5 완료**(2026-11-14): CDC CLI(PRD 7장 명령 전부)를 ffplay 영상 재생 중 보드에서 확인. CDC data IN Tx FIFO가 256 B라 CLI 출력은 256 B 이하로 나눠 보낸다(`ux_device_cdc_acm.c`). 다음은 M6(플래시 부팅, 재연결 100회, 24시간).
 - HardFault 시 원인 레지스터·PC·스레드 이름이 USART1로 출력된다. PC는 `arm-none-eabi-addr2line -f -e fw/Debug/STM32N6_UVC.elf <PC>`로 찾는다. Debug(-O0)는 스택을 많이 쓰니 스레드 스택은 넉넉히 잡는다.
 
 ## 펌웨어 구조 (fw/)
@@ -60,4 +62,5 @@ CubeIDE headless 빌드. 워크스페이스는 임시 폴더를 쓰고, `-import
 - 개발 모드 전용 링커 배치(AXISRAM2, ROM 383K / RAM 128K, 끝 64K는 MPU 비캐시: USBX 풀(USB DMA 버퍼)·hpcd·MSP 스택). 플래시 부팅 구조는 M6에서.
 - 디버그 로그: printf → USART1(ST-LINK 가상 COM, 115200).
 - 영상: `fw/Video/`(video_app: 카메라·인코딩·ISP 스레드와 `MX_DCMIPP_Init` 재정의, h264_enc, vframe_queue, video_cfg). 큰 버퍼는 `IN_PSRAM`(링커 `.psram_bss`, 0x90000000, MPU 비캐시). PSRAM은 `main.c`의 `PSRAM_Init()`이 ThreadX 시작 전에 켠다.
+- CLI(M5): `fw/App/`(settings: 설정 항목 테이블, cli: 줄 편집·명령, app_log, app_version). CDC 스레드는 `ux_device_cdc_acm.c`의 `usbx_cdc_acm_cli_thread_entry`. 설정 항목은 `settings.c` 테이블에 한 줄 추가하면 명령·help가 생긴다. 비트레이트·GOP 변경은 영상 스레드가 인코더를 다시 만들어 반영(VENC는 HRD 켠 채 실행 중 율 제어 변경 불가).
 - HSLV OTP 퓨즈는 읽기만 한다(ST 예제 FSBL은 굽지만 되돌릴 수 없으므로 굽지 않는다).

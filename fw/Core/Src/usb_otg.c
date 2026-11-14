@@ -72,7 +72,8 @@ void MX_USB1_OTG_HS_PCD_Init(void)
   /* Tx FIFO 0: EP0 control */
   HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS1, 0, 0x10);
 
-  /* Tx FIFO 1: CDC data IN (0x81) */
+  /* Tx FIFO 1: CDC data IN (0x81). 256 B라 HS 최대 패킷(512 B)보다 작다.
+     CLI 출력(ux_device_cdc_acm.c)은 256 B 이하로 나눠 보낸다(M5). */
   HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_HS1, 1, 0x40);
 
   /* Tx FIFO 2: CDC command IN (0x82) */

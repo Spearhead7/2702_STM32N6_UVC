@@ -34,8 +34,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define CDC_ECHO_THREAD_STACK_SIZE   2048U
-#define CDC_ECHO_THREAD_PRIO         20U
+/* CDC CLI 스레드(M5). snprintf를 쓰고 Debug(-O0)라 스택을 넉넉히, 일반 RAM에 둔다(USBX 풀 아님) */
+#define CDC_CLI_THREAD_STACK_SIZE    4096U
+#define CDC_CLI_THREAD_PRIO          20U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -56,7 +57,8 @@ static TX_THREAD ux_device_app_thread;
 
 /* USER CODE BEGIN PV */
 extern PCD_HandleTypeDef           hpcd_USB_OTG_HS1;
-static TX_THREAD                        ux_cdc_echo_thread;
+static TX_THREAD                        ux_cdc_cli_thread;
+static ULONG                            ux_cdc_cli_stack[CDC_CLI_THREAD_STACK_SIZE / sizeof(ULONG)];
 TX_QUEUE                                ux_app_MsgQueue;
 #if defined ( __ICCARM__ ) /* IAR Compiler */
   #pragma data_alignment=4
@@ -115,18 +117,11 @@ UINT MX_USBX_Device_Init(VOID *memory_ptr)
     return TX_THREAD_ERROR;
   }
 
-  /* Allocate the stack for the cdc acm echo thread */
-  if (tx_byte_allocate(byte_pool, (VOID **) &pointer, CDC_ECHO_THREAD_STACK_SIZE,
-                       TX_NO_WAIT) != TX_SUCCESS)
-  {
-    return TX_POOL_ERROR;
-  }
-
-  /* Create the cdc acm echo thread */
-  if (tx_thread_create(&ux_cdc_echo_thread, "cdc_acm_echo_thread",
-                       usbx_cdc_acm_echo_thread_entry, 1, pointer,
-                       CDC_ECHO_THREAD_STACK_SIZE, CDC_ECHO_THREAD_PRIO,
-                       CDC_ECHO_THREAD_PRIO, TX_NO_TIME_SLICE,
+  /* Create the cdc acm CLI thread */
+  if (tx_thread_create(&ux_cdc_cli_thread, "cdc_cli",
+                       usbx_cdc_acm_cli_thread_entry, 1, ux_cdc_cli_stack,
+                       sizeof(ux_cdc_cli_stack), CDC_CLI_THREAD_PRIO,
+                       CDC_CLI_THREAD_PRIO, TX_NO_TIME_SLICE,
                        TX_AUTO_START) != TX_SUCCESS)
   {
     return TX_THREAD_ERROR;

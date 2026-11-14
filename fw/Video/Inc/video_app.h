@@ -43,6 +43,39 @@ const video_stats_t *video_app_stats(void);
 /* 다음 프레임을 키프레임(H.264 IDR)으로. UVC가 스트림을 열 때 부른다. */
 void video_request_keyframe(void);
 
+/* 통계 주기(5초) 평균. status 명령용. valid가 0이면 아직 한 주기도 지나지 않음 */
+typedef struct
+{
+  uint32_t valid;
+  uint32_t cap_fps_x10;    /* 캡처 fps × 10 */
+  uint32_t enc_fps_x10;    /* 인코딩 fps × 10 */
+  uint32_t bitrate_kbps;   /* 실제 출력 비트레이트 */
+} video_live_t;
+
+const video_live_t *video_app_live(void);
+
+/* ---- 실행 중 제어(설정 항목 테이블에서 부른다). 어느 스레드에서나 호출 가능 ---- */
+#define VIDEO_OK              0
+#define VIDEO_ERR_NOTREADY  (-1)   /* 카메라 시작 전 */
+#define VIDEO_ERR_AUTO      (-2)   /* AE가 켜져 있어 수동 노출·게인을 쓸 수 없음 */
+#define VIDEO_ERR_HW        (-3)
+
+int32_t  video_cam_get_ae(uint8_t *on);
+int32_t  video_cam_set_ae(uint8_t on);
+int32_t  video_cam_get_awb(uint8_t *on);
+int32_t  video_cam_set_awb(uint8_t on);       /* off: 지금 추정한 색온도로 고정 */
+int32_t  video_cam_get_exposure(int32_t *us);
+int32_t  video_cam_set_exposure(int32_t us);
+int32_t  video_cam_get_gain(int32_t *mdb);
+int32_t  video_cam_set_gain(int32_t mdb);
+
+/* 인코더 설정. 영상 스레드가 프레임 사이에 인코더를 다시 만들어 반영한다(VENC는 HRD를 켠 채
+   실행 중 율 제어 변경을 받지 않는다). 반영 순간 프레임 1~2장이 빠지고 다음 프레임은 IDR. */
+uint32_t video_get_bitrate_kbps(void);
+void     video_set_bitrate_kbps(uint32_t kbps);
+uint32_t video_get_gop(void);
+void     video_set_gop(uint32_t gop);
+
 #ifdef __cplusplus
 }
 #endif

@@ -160,20 +160,28 @@ flowchart LR
 - **입력**: 장치가 글자를 그대로 되돌려 보여 준다(에코). Enter(CR 또는 CRLF)로 실행, Backspace로 지우기, Ctrl+C로 줄 취소. 위 화살표 이력은 P1이다.
 - **문법**: 대소문자를 구분하지 않고, 띄어쓰기로 구분한다. 줄 길이는 최대 128자. 인수 없이 치면 현재값을 보여 준다(예: `cam exp`).
 - **도움말**: `help`는 그룹 목록, `help <그룹>`은 그 그룹의 명령과 인수 범위를 보여 준다.
-- **로그**: 비동기 로그는 입력 중인 줄을 지우고 출력한 뒤 프롬프트와 입력을 다시 그린다. 그래서 로그가 나와도 치던 명령이 깨지지 않는다.
+- **로그**: 디버그 로그(주기 통계, 연결/해제 등)는 USART1(ST-LINK 가상 COM)로만 나가고 CDC에는 비동기 로그가 없다(M5). 나중에 CDC로 비동기 로그를 보내게 되면, 입력 중인 줄을 지우고 출력한 뒤 프롬프트와 입력을 다시 그린다.
 - **line coding**: 터미널에서 고른 baud rate는 저장만 하고 동작에는 영향을 주지 않는다. 설정 표시는 115200 8N1이다.
 
 명령 예:
 
 ```text
 n6uvc> status
-stream   : on  H264 1280x720@30
-fps      : 30.0
-bitrate  : 41.2 Mbps
-drop     : 0
+stream   : on   H264 1280x720@30
+fps      : cap 30.0  enc 30.0  usb 30.0  (5 s avg)
+bitrate  : 4.1 Mbps  (target 4000 kbps, gop 30)
+latency  : 27.6 ms avg, 30.9 ms max  (capture -> USB done)
+drop     : late 0  noslot 0  queue 3  wait-idr 2  desync 0  encerr 0
+usb loss : isoinc 1  buferr 0
+camera   : ae on  awb on  exp 23814 us  gain 12.3 dB
 OK
 n6uvc> cam exp 10000
-exposure : 10000 us
+ERROR: cam exp: auto mode is on (turn it off first)
+n6uvc> cam ae off
+cam ae : off
+OK
+n6uvc> cam exp 10000
+cam exp : 10000 us
 OK
 n6uvc> enc bitrate 9000
 ERROR: bitrate range is 1000-8000 kbps
@@ -185,17 +193,19 @@ n6uvc>
 | `help [그룹]` | 명령 목록과 사용법 | 공통 |
 | `version` | 펌웨어 버전, 빌드 날짜 | 공통 |
 | `status` | 스트리밍 여부, 포맷·해상도, 현재 fps, 비트레이트, 드롭 수, 패킷 손실 수 | 공통 |
-| `cam ae <on\|off>` | 자동 노출 켜기/끄기 | 공통 |
-| `cam exp [us]` | 수동 노출 시간 조회/설정 | 공통 |
-| `cam gain [dB]` | 수동 게인 조회/설정 | 공통 |
-| `cam awb <on\|off>` | 자동 화이트밸런스 켜기/끄기 | 공통 |
-| `enc bitrate [kbps]` | H.264 목표 비트레이트 조회/설정(1000~8000) | 1-B |
-| `enc gop [frames]` | IDR 주기 조회/설정(기본 30) | 1-B |
+| `cam ae [on\|off]` | 자동 노출 켜기/끄기 | 공통 |
+| `cam exp [us]` | 수동 노출 시간 조회/설정(10~33000). AE가 꺼져 있어야 설정 가능 | 공통 |
+| `cam gain [dB]` | 수동 게인 조회/설정(0.0~72.0, 0.1 dB 단위). AE가 꺼져 있어야 설정 가능 | 공통 |
+| `cam awb [on\|off]` | 자동 화이트밸런스 켜기/끄기(끄면 그때 고른 색온도로 고정) | 공통 |
+| `enc bitrate [kbps]` | H.264 목표 비트레이트 조회/설정(1000~8000). 바꾸면 인코더를 다시 만든다(프레임 1~2장 빠짐, 다음은 IDR) | 1-B |
+| `enc gop [frames]` | IDR 주기 조회/설정(1~300, 기본 30). 바꾸면 인코더를 다시 만든다 | 1-B |
 | `enc idr` | 다음 프레임을 IDR로 강제 | 1-B |
-| `log level [0-3]` | 로그 레벨 조회/설정(0=끔, 3=상세) | 공통 |
-| `reboot` | 소프트 리셋(USB 재연결) | 공통 |
+| `log level [0-3]` | USART1 주기 통계 레벨(0 끔, 1 VIDEO, 2 +UVC, 3 +UVCPAY·LAT, 기본 3). 사건 로그는 항상 | 공통 |
+| `reboot` | 소프트 리셋(USB 재연결). 개발 모드에서는 보드가 멈추므로 디버거로 다시 실행해야 한다(M6 플래시 부팅부터 정상) | 공통 |
 
 설정값 저장(전원을 꺼도 유지)은 1단계에서 하지 않는다. 4단계 마우스 메뉴가 같은 설정 항목을 쓰게 되므로, 명령 처리는 ‘설정 항목 테이블’과 분리해 둔다. 그러면 나중에 메뉴가 같은 테이블을 쓸 수 있다.
+
+**구현(M5)**: `fw/App/`. `settings.c`가 설정 항목 테이블(그룹·이름·형식·범위·단위·설명·get/set)이고, `cli.c`는 이 테이블로 `<group> <name> [value]` 명령과 `help <group>`을 자동으로 만든다. 항목을 늘릴 때는 테이블에 한 줄을 더한다. 내장 명령(help, version, status, reboot, enc idr)만 `cli.c`에 있다. CDC CLI 스레드(`ux_device_cdc_acm.c`)는 읽기에서 계속 기다리고, 터미널이 포트를 열면(DTR 0→1) 별도 배너 스레드가 배너와 프롬프트를 보낸다. 터미널 표시 문자열은 영문이다.
 
 ## 8. 개발 환경과 참고 자료
 

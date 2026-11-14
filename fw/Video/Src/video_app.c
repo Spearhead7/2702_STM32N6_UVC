@@ -30,13 +30,16 @@
 #include "vtime.h"
 #include "stm32n6570_discovery_camera.h"
 #include "stm32n6xx_ll_venc.h"
+#include "isp_api.h"
+#include "app_log.h"
 #include <stdio.h>
 #include <string.h>
 
 /* ---------------------------------------------------------------------------
  * 설정
  * ------------------------------------------------------------------------- */
-static const video_cfg_t video_cfg =
+/* 비트레이트·GOP는 실행 중에 바뀐다(video_set_bitrate_kbps 등). 영상 스레드만 인코더에 반영한다. */
+static video_cfg_t video_cfg =
 {
   .width   = VIDEO_DEFAULT_WIDTH,
   .height  = VIDEO_DEFAULT_HEIGHT,
@@ -98,6 +101,12 @@ static volatile uint32_t cap_ready_start = 0U;
 static volatile uint32_t cap_ready_end   = 0U;
 
 static video_stats_t stats;
+static video_live_t  live;
+
+/* ISP(AE/AWB 처리, 노출·게인·WB 설정) 동시 접근 막기: isp 스레드와 CLI 스레드 */
+static TX_MUTEX         isp_mutex;
+/* CLI가 비트레이트·GOP를 바꾸면 1. 영상 스레드가 프레임 사이에 인코더를 다시 만든다. */
+static volatile uint8_t enc_reconfig_req = 0U;
 
 static void video_thread_entry(ULONG arg);
 static void isp_thread_entry(ULONG arg);
@@ -126,6 +135,12 @@ UINT video_app_init(void)
   stats.init_status = 1;   /* 아직 시작 전 */
 
   ret = tx_event_flags_create(&video_flags, "video flags");
+  if (ret != TX_SUCCESS)
+  {
+    return ret;
+  }
+
+  ret = tx_mutex_create(&isp_mutex, "isp mutex", TX_INHERIT);
   if (ret != TX_SUCCESS)
   {
     return ret;
@@ -353,6 +368,19 @@ static void video_print_stats(uint32_t period_ms)
   uint32_t sum = stats.sum_size;
   stats.sum_size = 0U;
 
+  /* status 명령용 주기 평균(로그 레벨과 상관없이 계산) */
+  live.cap_fps_x10  = d_cap * 10000U / period_ms;
+  live.enc_fps_x10  = d_enc * 10000U / period_ms;
+  live.bitrate_kbps = (uint32_t)(((uint64_t)sum * 8U) / period_ms);   /* bit/ms = kbps */
+  live.valid = 1U;
+
+  prev_cap = cap;
+  prev_enc = enc;
+  if (app_log_level < 1U)
+  {
+    return;
+  }
+
   printf("VIDEO: H264 cap %lu.%lu fps, enc %lu.%lu fps, avg %lu KB last %lu KB max %lu KB idr %lu KB, "
          "call %lu ms (max %lu), late %lu, desync %lu, noslot %lu, recycle %lu, err %lu, pipeerr %lu\r\n",
          (unsigned long)(d_cap * 1000U / period_ms), (unsigned long)((d_cap * 10000U / period_ms) % 10U),
@@ -364,9 +392,6 @@ static void video_print_stats(uint32_t period_ms)
          (unsigned long)stats.cap_skipped, (unsigned long)stats.desync, (unsigned long)stats.no_slot,
          (unsigned long)vfq_dropped(), (unsigned long)stats.enc_errors,
          (unsigned long)stats.pipe_errors);
-
-  prev_cap = cap;
-  prev_enc = enc;
 }
 
 /* 통계 출력 뒤에 불린다. 영상 소비자(UVC 등)가 자기 통계를 덧붙일 때 재정의한다.
@@ -400,11 +425,11 @@ static int32_t video_encoder_init(void)
   return h264_enc_init(&hc);
 }
 
-/* DCMIPP–VENC 동기가 어긋났을 때(VENC_USB encoder_reset()와 같음).
-   DCMIPP를 멈추고 프레임이 끝나길 기다린 뒤 VENC를 하드웨어 리셋하고 인코더를 새로 만든다. */
-static void video_encoder_reset(void)
+/* DCMIPP–VENC 동기가 어긋났을 때(VENC_USB encoder_reset()와 같음), 그리고 CLI가
+   비트레이트·GOP를 바꿨을 때. DCMIPP를 멈추고 프레임이 끝나길 기다린 뒤 VENC를 하드웨어
+   리셋하고 인코더를 새로 만든다(video_cfg의 현재 값으로). */
+static void video_encoder_restart(void)
 {
-  stats.desync++;
   (void)HAL_DCMIPP_PIPE_Suspend(&hcamera_dcmipp, DCMIPP_PIPE1);
   tx_thread_sleep((15U * TX_TIMER_TICKS_PER_SECOND / 1000U) + 1U);
 
@@ -507,7 +532,8 @@ static void video_encode_next_frame(void)
   stats.enc_errors++;
   if (h264_enc_is_desync(ret) != 0U)
   {
-    video_encoder_reset();
+    stats.desync++;
+    video_encoder_restart();
   }
 }
 
@@ -577,6 +603,15 @@ static void video_thread_entry(ULONG arg)
     if (tx_event_flags_get(&video_flags, FLAG_FRAME, TX_OR_CLEAR, &flags,
                            VIDEO_FRAME_TIMEOUT_MS * TX_TIMER_TICKS_PER_SECOND / 1000U) == TX_SUCCESS)
     {
+      if (enc_reconfig_req != 0U)
+      {
+        /* CLI가 바꾼 비트레이트·GOP 반영(프레임 사이) */
+        enc_reconfig_req = 0U;
+        video_encoder_restart();
+        printf("VIDEO: encoder restarted, %lu kbps gop %lu\r\n",
+               (unsigned long)(video_cfg.bitrate / 1000U), (unsigned long)video_cfg.gop);
+        continue;
+      }
       video_encode_next_frame();
     }
     else
@@ -603,7 +638,9 @@ static void isp_thread_entry(ULONG arg)
     (void)tx_event_flags_get(&video_flags, FLAG_ISP, TX_OR_CLEAR, &flags, TX_WAIT_FOREVER);
     if (stats.init_status == 0)
     {
+      (void)tx_mutex_get(&isp_mutex, TX_WAIT_FOREVER);
       (void)BSP_CAMERA_BackgroundProcess();
+      (void)tx_mutex_put(&isp_mutex);
     }
   }
 }
@@ -629,4 +666,163 @@ static void vstats_thread_entry(ULONG arg)
     video_stats_hook(now - last);
     last = now;
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * 실행 중 제어(CLI 설정 항목 테이블에서 부른다)
+ * ------------------------------------------------------------------------- */
+const video_live_t *video_app_live(void)
+{
+  return &live;
+}
+
+/* 카메라가 동작 중이면 ISP 뮤텍스를 잡는다. 아니면 VIDEO_ERR_NOTREADY */
+static int32_t isp_lock(void)
+{
+  if (stats.init_status != 0)
+  {
+    return VIDEO_ERR_NOTREADY;
+  }
+  (void)tx_mutex_get(&isp_mutex, TX_WAIT_FOREVER);
+  return VIDEO_OK;
+}
+
+static void isp_unlock(void)
+{
+  (void)tx_mutex_put(&isp_mutex);
+}
+
+int32_t video_cam_get_ae(uint8_t *on)
+{
+  int32_t ret = isp_lock();
+  if (ret == VIDEO_OK)
+  {
+    ret = (ISP_GetAECState(&hcamera_isp, on) == ISP_OK) ? VIDEO_OK : VIDEO_ERR_HW;
+    isp_unlock();
+  }
+  return ret;
+}
+
+int32_t video_cam_set_ae(uint8_t on)
+{
+  int32_t ret = isp_lock();
+  if (ret == VIDEO_OK)
+  {
+    ret = (ISP_SetAECState(&hcamera_isp, on) == ISP_OK) ? VIDEO_OK : VIDEO_ERR_HW;
+    isp_unlock();
+  }
+  return ret;
+}
+
+int32_t video_cam_get_awb(uint8_t *on)
+{
+  uint32_t temp = 0U;
+  int32_t ret = isp_lock();
+  if (ret == VIDEO_OK)
+  {
+    ret = (ISP_GetWBRefMode(&hcamera_isp, on, &temp) == ISP_OK) ? VIDEO_OK : VIDEO_ERR_HW;
+    isp_unlock();
+  }
+  return ret;
+}
+
+int32_t video_cam_set_awb(uint8_t on)
+{
+  uint8_t  automatic = 0U;
+  uint32_t temp = 0U;
+  int32_t  ret = isp_lock();
+  if (ret == VIDEO_OK)
+  {
+    /* 끌 때는 지금 AWB가 고른 기준 색온도로 고정한다 */
+    if ((ISP_GetWBRefMode(&hcamera_isp, &automatic, &temp) != ISP_OK) ||
+        (ISP_SetWBRefMode(&hcamera_isp, on, temp) != ISP_OK))
+    {
+      ret = VIDEO_ERR_HW;
+    }
+    isp_unlock();
+  }
+  return ret;
+}
+
+int32_t video_cam_get_exposure(int32_t *us)
+{
+  int32_t ret = isp_lock();
+  if (ret == VIDEO_OK)
+  {
+    ret = (hcamera_isp.appliHelpers.GetSensorExposure(0U, us) == ISP_OK) ? VIDEO_OK : VIDEO_ERR_HW;
+    isp_unlock();
+  }
+  return ret;
+}
+
+int32_t video_cam_get_gain(int32_t *mdb)
+{
+  int32_t ret = isp_lock();
+  if (ret == VIDEO_OK)
+  {
+    ret = (hcamera_isp.appliHelpers.GetSensorGain(0U, mdb) == ISP_OK) ? VIDEO_OK : VIDEO_ERR_HW;
+    isp_unlock();
+  }
+  return ret;
+}
+
+/* 수동 노출·게인: AE가 켜져 있으면 AE가 곧바로 덮어쓰므로 거부한다 */
+static int32_t cam_set_manual(uint8_t is_gain, int32_t value)
+{
+  uint8_t ae = 1U;
+  int32_t ret = isp_lock();
+  if (ret != VIDEO_OK)
+  {
+    return ret;
+  }
+  if (ISP_GetAECState(&hcamera_isp, &ae) != ISP_OK)
+  {
+    ret = VIDEO_ERR_HW;
+  }
+  else if (ae != 0U)
+  {
+    ret = VIDEO_ERR_AUTO;
+  }
+  else if (is_gain != 0U)
+  {
+    ret = (hcamera_isp.appliHelpers.SetSensorGain(0U, value) == ISP_OK) ? VIDEO_OK : VIDEO_ERR_HW;
+  }
+  else
+  {
+    ret = (hcamera_isp.appliHelpers.SetSensorExposure(0U, value) == ISP_OK) ? VIDEO_OK : VIDEO_ERR_HW;
+  }
+  isp_unlock();
+  return ret;
+}
+
+int32_t video_cam_set_exposure(int32_t us)
+{
+  return cam_set_manual(0U, us);
+}
+
+int32_t video_cam_set_gain(int32_t mdb)
+{
+  return cam_set_manual(1U, mdb);
+}
+
+uint32_t video_get_bitrate_kbps(void)
+{
+  return video_cfg.bitrate / 1000U;
+}
+
+void video_set_bitrate_kbps(uint32_t kbps)
+{
+  video_cfg.bitrate = kbps * 1000U;
+  enc_reconfig_req = 1U;
+}
+
+uint32_t video_get_gop(void)
+{
+  return video_cfg.gop;
+}
+
+void video_set_gop(uint32_t gop)
+{
+  video_cfg.gop = gop;
+  enc_reconfig_req = 1U;
 }

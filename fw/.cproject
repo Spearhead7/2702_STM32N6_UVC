@@ -98,6 +98,7 @@
 									<listOptionValue builtIn="false" value="../USBX/App"/>
 									<listOptionValue builtIn="false" value="../USBX/Target"/>
 									<listOptionValue builtIn="false" value="../Video/Inc"/>
+									<listOptionValue builtIn="false" value="../App/Inc"/>
 									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/Common"/>
 									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/imx335"/>
 									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/aps256xx"/>
@@ -256,6 +257,7 @@
 									<listOptionValue builtIn="false" value="../USBX/App"/>
 									<listOptionValue builtIn="false" value="../USBX/Target"/>
 									<listOptionValue builtIn="false" value="../Video/Inc"/>
+									<listOptionValue builtIn="false" value="../App/Inc"/>
 									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/Common"/>
 									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/imx335"/>
 									<listOptionValue builtIn="false" value="../Drivers/BSP/Components/aps256xx"/>

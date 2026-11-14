@@ -55,7 +55,8 @@ typedef struct
   uint32_t gop;       /* H.264 IDR 주기(프레임) */
 } video_cfg_t;
 
-/* 현재 설정(읽기 전용). 카메라 시작 전에 정해지고, 지금은 실행 중 변경을 지원하지 않는다. */
+/* 현재 설정(읽기 전용). 해상도·fps는 카메라 시작 전에 정해진다.
+   비트레이트·GOP는 video_set_bitrate_kbps()/video_set_gop()로 실행 중에 바꿀 수 있다(M5). */
 const video_cfg_t *video_cfg_get(void);
 
 #ifdef __cplusplus

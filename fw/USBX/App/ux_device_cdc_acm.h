@@ -55,7 +55,8 @@ VOID USBD_CDC_ACM_Deactivate(VOID *cdc_acm_instance);
 VOID USBD_CDC_ACM_ParameterChange(VOID *cdc_acm_instance);
 
 /* USER CODE BEGIN EFP */
-VOID usbx_cdc_acm_echo_thread_entry(ULONG thread_input);
+/* CDC 대화형 CLI 스레드(M5, PRD 7장) */
+VOID usbx_cdc_acm_cli_thread_entry(ULONG thread_input);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

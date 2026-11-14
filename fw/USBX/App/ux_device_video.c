@@ -28,6 +28,7 @@
 #include "vtime.h"
 #include <stdio.h>
 #include "fast_copy.h"
+#include "app_log.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -737,6 +738,26 @@ static VOID uvc_lat_on_payload_done(VOID)
   *         sent: 호스트로 다 보낸 프레임 수/초, isoinc: USB가 제때 못 보낸 패킷 누적,
   *         buferr: USBX 페이로드 버퍼 부족 누적, getfail: 페이로드 버퍼 얻기 실패 누적.
   */
+/* CLI status용: 통계 주기마다 갱신 */
+static volatile uint32_t uvc_live_fps_x10 = 0U;
+static volatile uint32_t uvc_live_lat_valid = 0U;
+static volatile uint32_t uvc_live_lat_avg_us = 0U;
+static volatile uint32_t uvc_live_lat_max_us = 0U;
+
+void uvc_status_get(uvc_status_t *st)
+{
+  st->streaming    = (uint8_t)(uvc_state == UVC_PLAY_STATUS_STREAMING);
+  st->sent_fps_x10 = st->streaming ? uvc_live_fps_x10 : 0U;
+  st->skipped      = uvc_skipped_frames;
+  st->isoinc       = (uint32_t)ux_dcd_stm32_iso_in_incomplete_count;
+  st->buferr       = (stream_write != UX_NULL) ?
+                     (uint32_t)stream_write->ux_device_class_video_stream_buffer_error_count : 0U;
+  st->lat_valid    = st->streaming ? uvc_live_lat_valid : 0U;
+  st->lat_avg_us   = uvc_live_lat_avg_us;
+  st->lat_max_us   = uvc_live_lat_max_us;
+}
+
+/* 통계 주기마다 불린다. 값은 항상 계산하고, 출력은 로그 레벨(2: UVC, 3: UVCPAY·LAT)에 따른다. */
 void video_stats_hook(uint32_t period_ms)
 {
   static uint32_t prev_sent = 0U;
@@ -753,13 +774,17 @@ void video_stats_hook(uint32_t period_ms)
   {
     period_ms = 1U;
   }
+  uvc_live_fps_x10 = d * 10000U / period_ms;
 
+  if (app_log_level >= 2U)
+  {
   printf("UVC: %s H264, sent %lu.%lu fps, empty %lu, skipfrm %lu, isoinc %lu, buferr %lu, getfail %lu\r\n",
          (uvc_state == UVC_PLAY_STATUS_STREAMING) ? "streaming" : "stopped",
          (unsigned long)(d * 1000U / period_ms), (unsigned long)((d * 10000U / period_ms) % 10U),
          (unsigned long)uvc_empty_payloads, (unsigned long)uvc_skipped_frames,
          (unsigned long)ux_dcd_stm32_iso_in_incomplete_count,
          (unsigned long)buferr, (unsigned long)uvc_payload_get_fail);
+  }
 
   /* 데이터 페이로드 전송 간격(이상적이면 125 us, 마이크로프레임마다 하나) */
   {
@@ -770,6 +795,7 @@ void video_stats_hook(uint32_t period_ms)
 
     uvc_gap_over = 0U;
     uvc_gap_max_us = 0U;
+    if (app_log_level >= 3U)
     printf("UVCPAY: data %lu/s, gap>%luus %lu, maxgap %lu us\r\n",
            (unsigned long)((dp - prev_data) * 1000U / period_ms), (unsigned long)UVC_GAP_LIMIT_US,
            (unsigned long)over, (unsigned long)gmax);
@@ -797,7 +823,13 @@ void video_stats_hook(uint32_t period_ms)
     uvc_lat.n = 0U;
     UX_RESTORE
 
+    uvc_live_lat_valid = (n > 0U) ? 1U : 0U;
     if (n > 0U)
+    {
+      uvc_live_lat_avg_us = sum[UVC_LAT_NUM - 1U] / n;   /* total */
+      uvc_live_lat_max_us = max[UVC_LAT_NUM - 1U];
+    }
+    if ((n > 0U) && (app_log_level >= 3U))
     {
       printf("LAT ms (avg/max, n %lu):", (unsigned long)n);
       for (i = 0U; i < UVC_LAT_NUM; i++)
